@@ -45,6 +45,27 @@
   #dataBanner.show{display:flex}
   #dataBanner button{border:1px solid var(--warn);background:none;color:var(--warn);border-radius:6px;padding:3px 10px;font-size:12px;cursor:pointer}
   #dataBanner button:hover{background:var(--warn);color:#131313}
+  /* calendar hub */
+  #calBtn.active{background:var(--accent);color:#131313}
+  #calPanel{position:absolute;inset:14px;z-index:1250;background:var(--bg2);border:1px solid var(--accent);
+    border-radius:12px;box-shadow:0 12px 40px rgba(0,0,0,.65);display:none;flex-direction:column;overflow:hidden}
+  #calPanel.show{display:flex}
+  .cal-head{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;font-family:'Barlow Condensed';
+    font-weight:700;font-size:19px;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);border-bottom:1px dashed var(--line);flex:none}
+  .cal-head button{border:1px solid var(--line);background:none;border-radius:6px;width:28px;height:28px;color:var(--muted);cursor:pointer;font-size:14px}
+  .cal-head button:hover{border-color:var(--accent);color:var(--accent)}
+  #calBody{flex:1;display:flex;flex-direction:column;min-height:0}
+  #calFrame{flex:1;width:100%;border:0;background:#fff;border-radius:0 0 10px 10px}
+  .cal-foot{flex:none;padding:6px 12px;text-align:right;background:var(--bg2)}
+  .cal-foot button{border:1px solid var(--line);background:none;color:var(--muted);border-radius:6px;padding:3px 10px;font-size:11px;cursor:pointer}
+  .cal-foot button:hover{border-color:var(--accent);color:var(--accent)}
+  .cal-setup{padding:26px;max-width:560px;margin:0 auto;font-size:13.5px;line-height:1.7;color:var(--text)}
+  .cal-setup ol{margin:10px 0;padding-left:22px}
+  .cal-row{display:flex;gap:8px;margin:12px 0}
+  .cal-row input{flex:1;background:var(--card);border:1px solid var(--line);border-radius:8px;color:var(--text);padding:9px 12px;font-size:13px}
+  .cal-row input:focus{border-color:var(--accent);outline:none}
+  .cal-row button{border:1px solid var(--accent);background:var(--accent);color:#131313;border-radius:8px;padding:9px 18px;font-weight:600;cursor:pointer}
+  .cal-note{font-size:12px;color:var(--muted)}
   /* crew runs */
   .runStop{width:16px;height:16px;border-radius:50%;background:#131313;border:2.5px solid;color:#fff;
     font:700 9px/12px 'Inter',sans-serif;text-align:center;box-shadow:0 1px 4px rgba(0,0,0,.6)}
@@ -191,6 +212,8 @@
   .note{margin-top:8px;font-size:13px;color:var(--muted);line-height:1.45}
   .srcco{margin-top:7px;font-size:11.5px;font-weight:600;color:var(--accent);letter-spacing:.03em}
   .rdyline{margin-top:4px;font-size:11.5px;font-weight:600}
+  .calline{margin-top:5px;font-size:11.5px;color:var(--sky);line-height:1.5}
+  .calline b{color:var(--sky)}
   .addr{margin-top:4px;font-size:12px;color:var(--muted)}
   .plinks{margin-top:10px;gap:8px}
   .plinks a{font-size:12px;color:var(--sky);text-decoration:none;border:1px solid var(--line);border-radius:6px;padding:4px 10px}
@@ -363,6 +386,7 @@
       <div class="note" id="pNote"></div>
       <div class="srcco" id="pCo"></div>
       <div class="rdyline" id="pReady" style="display:none"></div>
+      <div class="calline" id="pCal" style="display:none"></div>
       <div class="addr" id="pAddr"></div>
       <div class="row plinks">
         <a id="pMap" href="#" target="_blank" rel="noopener"> Apple Maps ↗</a>
@@ -912,6 +936,169 @@ async function buildBoard(){
   }
   await Promise.all([worker(),worker(),worker()]);
 }
+
+// ===== Calendar data: read the Orders calendar and fuse it with the map =====
+let CAL_EVENTS=[], CAL_STATE='loading';
+function icsUnfold(t){ return t.replace(/\r\n[ \t]/g,'').replace(/\n[ \t]/g,''); }
+function icsDate(v){
+  // DTSTART;VALUE=DATE:20260730  or  DTSTART;TZID=America/New_York:20260730T100000
+  const m=/(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2}))?/.exec(v||'');
+  if(!m) return null;
+  return new Date(+m[1],+m[2]-1,+m[3],m[4]?+m[4]:9,m[5]?+m[5]:0);
+}
+function parseICS(text){
+  const out=[];
+  const blocks=icsUnfold(text).split('BEGIN:VEVENT').slice(1);
+  for(const b of blocks){
+    const sum=(/\nSUMMARY:(.*)/.exec(b)||/^SUMMARY:(.*)/m.exec(b)||[])[1];
+    const dt=(/DTSTART[^:\n]*:([^\r\n]+)/.exec(b)||[])[1];
+    if(!sum||!dt) continue;
+    const d=icsDate(dt);
+    if(!d) continue;
+    out.push({title:sum.trim().replace(/\\,/g,','),date:d});
+  }
+  return out;
+}
+function normName(s){
+  return String(s||'').toLowerCase()
+    .replace(/\([^)]*\)/g,' ')                       // (MD), (Pour), (Repair)
+    .replace(/\b(prep|pour|repair|install|do not|dont|don't|reschedule|tent|am|pm)\b/g,' ')
+    .replace(/[^a-z ]/g,' ').replace(/\s+/g,' ').trim();
+}
+function evKind(title){
+  const t=title.toLowerCase();
+  if(/repair/.test(t)) return 'Repair';
+  if(/pour/.test(t)) return 'Pour';
+  if(/prep/.test(t)) return 'Prep';
+  return 'Job';
+}
+function eventsFor(c){
+  if(!CAL_EVENTS.length) return [];
+  const cn=normName(c.name);
+  if(cn.length<4) return [];
+  const parts=cn.split(' ').filter(w=>w.length>2);
+  const last=parts[parts.length-1], first=parts[0];
+  const today=new Date(); today.setHours(0,0,0,0);
+  return CAL_EVENTS.filter(e=>{
+    const en=normName(e.title);
+    if(en===cn) return true;
+    if(last&&first&&en.includes(last)&&en.includes(first)) return true;
+    return false;
+  }).filter(e=>e.date>=new Date(today.getTime()-3*86400e3))
+    .sort((a,b)=>a.date-b.date).slice(0,4);
+}
+async function loadCalendar(){
+  try{
+    const r=await fetch('/api/calendar');
+    if(!r.ok) throw new Error('feed '+r.status);
+    const t=await r.text();
+    if(!/BEGIN:VEVENT/.test(t)) throw new Error('no events in feed');
+    CAL_EVENTS=parseICS(t);
+    CAL_STATE=CAL_EVENTS.length?'ok':'empty';
+    scheduleWeatherCheck();
+  }catch(e){ CAL_STATE='off'; }
+}
+loadCalendar();
+// cross-check: booked dates vs the forecast at that customer's site
+async function scheduleWeatherCheck(){
+  if(!MASTER_LIST.length){ setTimeout(scheduleWeatherCheck,3000); return; }
+  const soon=new Date(Date.now()+8*86400e3);
+  const booked=[];
+  for(const c of MASTER_LIST){
+    const evs=eventsFor(c).filter(e=>e.date<=soon&&/Pour|Prep|Repair/.test(evKind(e.title)));
+    if(evs.length) booked.push({c,evs});
+    if(booked.length>=14) break;
+  }
+  for(const b of booked){
+    try{
+      const wx=await fetchWx(b.c);
+      if(!wx.grid) continue;
+      const a=analyzeWx(b.c,null,wx.hourly,wx.grid,null,wx.ext);
+      for(const e of b.evs){
+        const key=e.date.toISOString().slice(0,10);
+        const day=(a.days||[]).find(d=>d.key===key);
+        if(!day) continue;
+        const kind=evKind(e.title);
+        const when=e.date.toLocaleDateString([],{weekday:'short',month:'numeric',day:'numeric'});
+        if(kind==='Pour'&&['rain','wet','freeze'].includes(day.grade)){
+          addAlert('cal:'+b.c.name+':'+key,
+            'BOOKED POUR at risk — '+b.c.name+' is on the calendar for '+when+
+            ', but that day grades '+(day.grade==='freeze'?'too cold':day.grade==='rain'?fmtIn(day.amt)+' rain':'ground too wet')+'. Confirm or move.');
+        } else if(kind==='Prep'&&(day.grade==='rain'||day.amt>=0.35)){
+          addAlert('cal:'+b.c.name+':'+key,
+            'BOOKED PREP at risk — '+b.c.name+' on the calendar for '+when+' with '+fmtIn(day.amt)+' rain forecast. Prep-day rain pushes the pour.');
+        }
+      }
+    }catch(e){}
+    await sleep(250);
+  }
+}
+
+// ===== Calendar hub tab =====
+const CAL_DEFAULT='https://calendar.google.com/calendar/embed?src=orders%40muscleconcrete.com&ctz=America%2FNew_York&mode=MONTH&showTitle=0&showPrint=0&showCalendars=0&wkst=1';
+let CAL_URL=CAL_DEFAULT;
+try{ CAL_URL=localStorage.getItem('mcCalUrl')||CAL_DEFAULT; }catch(e){}
+function calSrc(raw){
+  raw=(raw||'').trim();
+  if(!raw) return '';
+  // accept a full embed URL, a share link, or a bare calendar ID
+  if(/^https?:\/\//i.test(raw)){
+    if(/calendar\/embed/.test(raw)) return raw;
+    const m=raw.match(/[?&]src=([^&]+)/);
+    if(m) return 'https://calendar.google.com/calendar/embed?src='+m[1];
+    return raw;
+  }
+  return 'https://calendar.google.com/calendar/embed?src='+encodeURIComponent(raw)+
+    '&mode=MONTH&showTitle=0&showPrint=0&showTabs=1&showCalendars=0&wkst=1';
+}
+function renderCal(){
+  const body=document.getElementById('calBody');
+  const src=calSrc(CAL_URL);
+  if(src){
+    body.innerHTML='<iframe id="calFrame" src="'+src+'" frameborder="0" scrolling="no"></iframe>'+
+      '<div class="cal-foot"><button id="calChange">Change calendar</button></div>';
+    document.getElementById('calChange').onclick=()=>{ CAL_URL=''; try{localStorage.removeItem('mcCalUrl');}catch(e){} renderCal(); };
+    // (setup screen still offers reconnect; Connect with empty input restores the default)
+  } else {
+    body.innerHTML=`<div class="cal-setup">
+      <b>Connect the Orders calendar (one time per device):</b>
+      <ol>
+        <li>Google Calendar → gear → Settings → click <b>Orders Muscle Concrete</b> on the left</li>
+        <li>Scroll to <b>Integrate calendar</b> → copy the <b>Calendar ID</b> (looks like a long address)</li>
+        <li>Paste it here:</li>
+      </ol>
+      <div class="cal-row"><input id="calInput" type="text" placeholder="Calendar ID or embed link…"><button id="calSave">Connect</button></div>
+      <div class="cal-note">Note: events only display for people signed into a Google account that the calendar is shared with — your crew's normal logins. No need to make the calendar public.</div>
+    </div>`;
+    document.getElementById('calSave').onclick=()=>{
+      const v=document.getElementById('calInput').value.trim();
+      CAL_URL=v||CAL_DEFAULT;
+      try{ if(v) localStorage.setItem('mcCalUrl',v); else localStorage.removeItem('mcCalUrl'); }catch(e){}
+      renderCal();
+    };
+  }
+}
+const calBtnCtl=L.control({position:'topleft'});
+calBtnCtl.onAdd=function(){
+  const d=L.DomUtil.create('div','leaflet-bar');
+  d.innerHTML='<a href="#" id="calBtn" title="Orders calendar" role="button" aria-label="Orders calendar">📅</a>';
+  L.DomEvent.disableClickPropagation(d);
+  d.querySelector('a').onclick=e=>{e.preventDefault();
+    const p=document.getElementById('calPanel');
+    const on=!p.classList.contains('show');
+    p.classList.toggle('show',on);
+    document.getElementById('calBtn').classList.toggle('active',on);
+    if(on) renderCal();
+  };
+  return d;
+};
+calBtnCtl.addTo(map);
+const calPanel=document.createElement('div');
+calPanel.id='calPanel';
+calPanel.innerHTML='<div class="cal-head">Orders Calendar <button id="calClose">✕</button></div><div id="calBody"></div>';
+document.getElementById('wrap').appendChild(calPanel);
+L.DomEvent.disableClickPropagation(calPanel);
+document.getElementById('calClose').onclick=()=>{document.getElementById('calPanel').classList.remove('show');document.getElementById('calBtn').classList.remove('active');};
 
 // ===== Runs — crew-colored job strings =====
 const CREWS=[
@@ -2009,6 +2196,14 @@ async function openTicket(c){
     rl.textContent='Ready since '+new Date(c.ready).toLocaleDateString([],{month:'short',day:'numeric'})+' — '+c.readyDays+' day'+(c.readyDays===1?'':'s')+' waiting';
     rl.style.color=c.readyDays>=14?'#e05445':c.readyDays>=7?'#f0d020':'var(--muted)';
   } else rl.style.display='none';
+  const cl=document.getElementById('pCal');
+  const evs=(typeof eventsFor==='function')?eventsFor(c):[];
+  if(evs.length){
+    cl.style.display='block';
+    cl.innerHTML='📅 On the schedule: '+evs.map(e=>
+      '<b>'+esc(evKind(e.title))+' '+e.date.toLocaleDateString([],{weekday:'short',month:'numeric',day:'numeric'})+'</b>'
+    ).join(' · ');
+  } else cl.style.display='none';
   document.getElementById('pNote').textContent=c.note||'';
   document.getElementById('pAddr').textContent=c.addr||`${c.lat.toFixed(4)}, ${c.lng.toFixed(4)}`;
   const ll=`${c.lat.toFixed(5)},${c.lng.toFixed(5)}`;
