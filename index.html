@@ -212,6 +212,34 @@
   .note{margin-top:8px;font-size:13px;color:var(--muted);line-height:1.45}
   .srcco{margin-top:7px;font-size:11.5px;font-weight:600;color:var(--accent);letter-spacing:.03em}
   .rdyline{margin-top:4px;font-size:11.5px;font-weight:600}
+  .tk-actions{margin-top:10px;gap:8px}
+  .tk-actions button{font-size:12px;border:1px solid var(--line);background:var(--card);color:var(--text);
+    border-radius:6px;padding:5px 11px;cursor:pointer}
+  .tk-actions button:hover{border-color:var(--accent);color:var(--accent)}
+  #editModal{position:absolute;inset:0;z-index:1400;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.55)}
+  #editModal.show{display:flex}
+  .em-card{width:min(560px,94vw);max-height:88vh;overflow-y:auto;background:var(--bg2);border:1px solid var(--accent);
+    border-radius:12px;box-shadow:0 16px 48px rgba(0,0,0,.7)}
+  .em-head{display:flex;justify-content:space-between;align-items:center;padding:13px 16px;font-family:'Barlow Condensed';
+    font-weight:700;font-size:18px;letter-spacing:.05em;text-transform:uppercase;color:var(--accent);border-bottom:1px dashed var(--line)}
+  .em-head button{border:1px solid var(--line);background:none;border-radius:6px;width:26px;height:26px;color:var(--muted);cursor:pointer}
+  .em-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px 12px;padding:14px 16px}
+  .em-grid label{display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+  .em-grid .em-wide{grid-column:1/-1}
+  .em-grid input,.em-grid select,.em-grid textarea{background:var(--card);border:1px solid var(--line);border-radius:7px;
+    color:var(--text);padding:8px 10px;font-size:13.5px;font-family:'Inter',sans-serif}
+  .em-grid input:focus,.em-grid select:focus,.em-grid textarea:focus{border-color:var(--accent);outline:none}
+  .em-foot{display:flex;align-items:center;gap:8px;padding:12px 16px;border-top:1px dashed var(--line)}
+  .em-gap{flex:1}
+  .em-foot button{border:1px solid var(--line);background:var(--card);color:var(--text);border-radius:7px;padding:8px 16px;font-size:13px;cursor:pointer}
+  .em-foot .primary{background:var(--accent);border-color:var(--accent);color:#131313;font-weight:600}
+  .em-foot .danger{border-color:rgba(224,84,69,.5);color:#e05445;background:none}
+  .em-foot .danger:hover{background:rgba(224,84,69,.12)}
+  @media (max-width:520px){ .em-grid{grid-template-columns:1fr} }
+  .phline{margin-top:5px;font-size:12px}
+  .phline a{color:var(--sky);text-decoration:none;font-weight:600}
+  .lg-completed{display:flex;align-items:center;gap:6px;margin-top:7px;padding-top:7px;border-top:1px dashed var(--line);
+    font-size:11px;color:var(--muted);cursor:pointer}
   .calline{margin-top:5px;font-size:11.5px;color:var(--sky);line-height:1.5}
   .calline b{color:var(--sky)}
   .addr{margin-top:4px;font-size:12px;color:var(--muted)}
@@ -375,6 +403,7 @@
       <span><i class="chip"><svg viewBox="0 0 18 18" width="14" height="14"><text x="9" y="14.6" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-weight="700" font-size="16" fill="#f4b41a">P</text></svg></i>Pour only</span>
       <span><i class="chip"><svg viewBox="0 0 18 18" width="14" height="14"><text x="9" y="14.6" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-weight="700" font-size="16" fill="#f4b41a">$</text></svg></i>Financed</span>
     </div>
+    <label class="lg-completed"><input type="checkbox" id="showCompleted"> Show completed jobs</label>
   </div>
   <aside id="panel" aria-label="Customer weather ticket">
     <div class="ticket-head">
@@ -388,6 +417,11 @@
       <div class="rdyline" id="pReady" style="display:none"></div>
       <div class="calline" id="pCal" style="display:none"></div>
       <div class="addr" id="pAddr"></div>
+      <div class="phline" id="pPhone" style="display:none"></div>
+      <div class="row tk-actions">
+        <button id="tkEdit">✎ Edit</button>
+        <button id="tkComplete">✓ Mark Completed</button>
+      </div>
       <div class="row plinks">
         <a id="pMap" href="#" target="_blank" rel="noopener"> Apple Maps ↗</a>
         <a id="pDir" href="#" target="_blank" rel="noopener">Directions ↗</a>
@@ -409,6 +443,7 @@ const STATUS = {
   notready: {label:'Not ready', hex:'#e05445'},
   repair:   {label:'Repair',    hex:'#f08c2e'},
   paidprep: {label:'Paid Prep', hex:'#f0d020'},
+  completed:{label:'Completed', hex:'#557a63'},
 };
 const MARKS = { 'P':{label:'Pour only'}, '$':{label:'Financed'} };
 const SAMPLE_CUSTOMERS = [ /* company defaults applied in openTicket */
@@ -558,6 +593,7 @@ const SHEET_URLS=[
 ];
 
 map.attributionControl.setPrefix('<span class="slogan">You Can\'t Build Without Muscle.</span>');
+document.getElementById('showCompleted').onchange=e=>{ SHOW_COMPLETED=e.target.checked; applyFilters(); };
 const markersLayer=L.layerGroup().addTo(map);
 const geoCache={}; // address -> {lat,lng} for this session
 
@@ -580,6 +616,7 @@ function parseCSV(text){
 }
 function normStatus(s){
   const k=String(s||'').toLowerCase().replace(/[^a-z]/g,'');
+  if(/complet|done|finish/.test(k)) return 'completed';
   return ({inhouse:'inhouse',jrcrew:'jrcrew',both:'both',scheduled:'scheduled',
     notready:'notready',repair:'repair',paidprep:'paidprep'})[k]||null;
 }
@@ -603,10 +640,12 @@ async function geocode(addr){
   return null;
 }
 let CUSTOMER_LIST=[]; let MASTER_LIST=[];
+let SHOW_COMPLETED=false;
 function addMarkers(list){
   CUSTOMER_LIST=list.slice();
   markersLayer.clearLayers();
   list.forEach(c=>{
+    if(c.status==='completed'&&!SHOW_COMPLETED) return;
     const s=STATUS[c.status]||{label:c.rawStatus||'—',hex:'#96999c'};
     const icon=L.divIcon({className:'',html:pinSVG(s.hex,c.mark),iconSize:[24,34],iconAnchor:[12,32]});
     L.marker([c.lat,c.lng],{icon}).addTo(markersLayer).on('click',()=>{
@@ -623,7 +662,7 @@ function dataBanner(msg,level){
   document.getElementById('dbText').textContent=msg;
   b.classList.add('show');
 }
-document.getElementById('dbRetry').onclick=()=>{ dataBanner(null); loadCustomers(); };
+document.getElementById('dbRetry').onclick=()=>{ dataBanner(null); loadCustomersSB(); };
 function loadSheetViaScript(){ // Google's gviz JSON endpoint invoked as a script: works from file://
   return new Promise((resolve,reject)=>{
     const cleanup=()=>{ delete window.google; s.remove(); clearTimeout(tm); };
@@ -668,6 +707,8 @@ async function loadCustomers(){
     const iP=col('prep date')>=0?col('prep date'):col('prepdate');
     const iB=col('basecamp link')>=0?col('basecamp link'):col('basecamp');
     const iR=col('ready date')>=0?col('ready date'):col('ready');
+    const iPh=col('phone')>=0?col('phone'):col('phone #');
+    const iL=col('lead days');
     const iMo=col('mood');
     const list=[],needGeo=[];
     rows.forEach(r=>{
@@ -688,6 +729,8 @@ async function loadCustomers(){
         prep:(iP>=0?(r[iP]||'').trim():''),
         basecamp:(iB>=0?(r[iB]||'').trim():''),
         ready:(iR>=0?(r[iR]||'').trim():''),
+        phone:(iPh>=0?(r[iPh]||'').trim():''),
+        leadDays:(iL>=0&&r[iL]&&isFinite(+r[iL]))?+r[iL]:null,
         mood:parseMood(iMo>=0?(r[iMo]||''):'')};
       // US safety net: all US longitudes are negative — a positive one is a missing minus sign
       if(isFinite(c.lat)&&isFinite(c.lng)&&c.lng>0&&c.lng<180&&c.lat>17&&c.lat<72) c.lng=-c.lng;
@@ -709,7 +752,108 @@ async function loadCustomers(){
     dataBanner('Customer sheet couldn\'t load ('+e.message+') — showing SAMPLE pins. If this is the Claude preview, download and open in your browser.');
   }
 }
-loadCustomers();
+// ===== SUPABASE: the database is home now =====
+const SB_URL='https://jfuhkrtwpgteobbvnebl.supabase.co';
+const SB_KEY='sb_publishable_gAJH9O0AGnQkoiXHJImDkw_VXwrvW29';
+function sbHeaders(write){
+  const h={'apikey':SB_KEY,'Authorization':'Bearer '+SB_KEY,'Content-Type':'application/json'};
+  if(write){ const p=getPin(); if(!p) return null; h['x-crew-pin']=p; }
+  return h;
+}
+function getPin(){
+  let p=null;
+  try{ p=localStorage.getItem('mcPin'); }catch(e){}
+  if(!p){
+    p=window.prompt('Enter crew PIN to make changes:');
+    if(!p) return null;
+    try{ localStorage.setItem('mcPin',p); }catch(e){}
+  }
+  return p;
+}
+function badPin(){
+  try{ localStorage.removeItem('mcPin'); }catch(e){}
+  alert('That PIN was not accepted — change not saved. Try again.');
+}
+function dbRow(c){ // db row -> map customer object
+  return {
+    id:c.id, name:c.name||'', addr:c.address||'',
+    lat:c.lat!=null?+c.lat:NaN, lng:c.lng!=null?+c.lng:NaN,
+    status:c.status||'notready', rawStatus:c.status||'',
+    mark:(c.mark==='P'||c.mark==='$')?c.mark:undefined,
+    note:c.note||'', company:c.company||'Muscle Concrete',
+    phone:c.phone||'', prep:c.prep_date||'', ready:c.ready_date||'',
+    leadDays:c.lead_days!=null?+c.lead_days:null,
+    mood:c.mood!=null?+c.mood:null, basecamp:c.basecamp_link||'',
+    completedDate:c.completed_date||''
+  };
+}
+async function loadCustomersSB(){
+  try{
+    const r=await fetch(SB_URL+'/rest/v1/customers?select=*&order=name',{headers:sbHeaders(false),cache:'no-store'});
+    if(!r.ok) throw new Error('database HTTP '+r.status);
+    const rows=await r.json();
+    if(!Array.isArray(rows)||!rows.length) throw new Error('database returned no customers');
+    const list=[], needGeo=[];
+    for(const raw of rows){
+      const c=dbRow(raw);
+      if(isFinite(c.lat)&&isFinite(c.lng)&&c.lng>0&&c.lng<180&&c.lat>17&&c.lat<72) c.lng=-c.lng;
+      if(isFinite(c.lat)&&isFinite(c.lng)) list.push(c);
+      else if(c.addr) needGeo.push(c);
+    }
+    MASTER_LIST=list; applyFilters(); dataBanner(null);
+    const unplaced=[];
+    for(const c of needGeo){
+      const p=await geocode(c.addr);
+      if(p){ c.lat=p.lat; c.lng=p.lng; list.push(c); MASTER_LIST=list; applyFilters();
+        sbUpdate(c,{lat:p.lat,lng:p.lng},true); // remember coordinates permanently
+      } else unplaced.push(c.name);
+    }
+    if(unplaced.length) dataBanner('⚠ Not placed (address lookup failed): '+unplaced.join(', ')+' — fix the address, then Retry.','warn');
+  }catch(e){
+    if(!MASTER_LIST.length){ MASTER_LIST=SAMPLE_CUSTOMERS; applyFilters(); }
+    dataBanner('Customer database couldn\'t load ('+e.message+'). Retry, and tell Jake if it persists.');
+  }
+}
+async function sbUpdate(c,fields,silent){
+  const h=silent?sbHeaders(false):sbHeaders(true);
+  if(!h) return false;
+  if(silent){ try{ const p=localStorage.getItem('mcPin'); if(p) h['x-crew-pin']=p; }catch(e){} }
+  try{
+    const r=await fetch(SB_URL+'/rest/v1/customers?id=eq.'+c.id,{
+      method:'PATCH',headers:Object.assign({'Prefer':'return=representation'},h),
+      body:JSON.stringify(fields)});
+    const rows=r.ok?await r.json():[];
+    if(!rows.length){ if(!silent) badPin(); return false; }
+    Object.assign(c,dbRow(rows[0]));
+    return true;
+  }catch(e){ if(!silent) alert('Save failed: '+e.message); return false; }
+}
+async function sbInsert(fields){
+  const h=sbHeaders(true);
+  if(!h) return null;
+  try{
+    const r=await fetch(SB_URL+'/rest/v1/customers',{
+      method:'POST',headers:Object.assign({'Prefer':'return=representation'},h),
+      body:JSON.stringify(fields)});
+    const rows=r.ok?await r.json():[];
+    if(!rows.length){ badPin(); return null; }
+    return dbRow(rows[0]);
+  }catch(e){ alert('Add failed: '+e.message); return null; }
+}
+async function sbDelete(c){
+  const h=sbHeaders(true);
+  if(!h) return false;
+  try{
+    const r=await fetch(SB_URL+'/rest/v1/customers?id=eq.'+c.id,{
+      method:'DELETE',headers:Object.assign({'Prefer':'return=representation'},h)});
+    const rows=r.ok?await r.json():[];
+    if(!rows.length){ badPin(); return false; }
+    return true;
+  }catch(e){ alert('Delete failed: '+e.message); return false; }
+}
+loadCustomersSB();
+setInterval(loadCustomersSB, 10*60*1000);
+window.addEventListener('focus',()=>{ if(document.visibilityState==='visible') loadCustomersSB(); });
 
 // ===== Filters =====
 let STATES_GEO=null;
@@ -937,6 +1081,114 @@ async function buildBoard(){
   await Promise.all([worker(),worker(),worker()]);
 }
 
+// ===== Edit & Add: the map writes back =====
+let EDIT_C=null;
+const editModal=document.createElement('div');
+editModal.id='editModal';
+editModal.innerHTML=`<div class="em-card">
+  <div class="em-head"><span id="emTitle">Edit customer</span><button id="emX">✕</button></div>
+  <div class="em-grid">
+    <label>Name<input id="emName"></label>
+    <label>Address<input id="emAddr"></label>
+    <label>Status<select id="emStatus">
+      <option value="notready">Not ready</option><option value="inhouse">In house</option>
+      <option value="jrcrew">JR Crew</option><option value="both">Both</option>
+      <option value="scheduled">Scheduled</option><option value="paidprep">Paid Prep</option>
+      <option value="repair">Repair</option><option value="completed">Completed</option>
+    </select></label>
+    <label>Mark<select id="emMark"><option value="">None</option><option value="P">P — Pour only</option><option value="$">$ — Financed</option></select></label>
+    <label>Company<input id="emCompany" list="emCoList"><datalist id="emCoList">
+      <option>Muscle Concrete</option><option>Carport Central</option><option>American</option>
+      <option>Prestige</option><option>Warrior</option><option>Nationwide</option><option>Colonial</option></datalist></label>
+    <label>Phone<input id="emPhone" type="tel" placeholder="336-555-0100"></label>
+    <label>Mood<select id="emMood"><option value="">—</option>
+      <option value="5">😊 Happy</option><option value="4">🙂 Good</option><option value="3">😐 Neutral</option>
+      <option value="2">😕 Frustrated</option><option value="1">😠 At risk</option></select></label>
+    <label>Prep date<input id="emPrep" type="date"></label>
+    <label>Ready date<input id="emReady" type="date"></label>
+    <label>Lead days (blank = company default)<input id="emLead" type="number" min="1" max="120"></label>
+    <label class="em-wide">Basecamp link<input id="emBC" placeholder="https://…"></label>
+    <label class="em-wide">Note<textarea id="emNote" rows="3"></textarea></label>
+  </div>
+  <div class="em-foot">
+    <button id="emDelete" class="danger">Delete</button>
+    <span class="em-gap"></span>
+    <button id="emCancel">Cancel</button>
+    <button id="emSave" class="primary">Save</button>
+  </div>
+</div>`;
+document.getElementById('wrap').appendChild(editModal);
+L.DomEvent.disableClickPropagation(editModal);
+function openEditor(c){
+  EDIT_C=c;
+  document.getElementById('emTitle').textContent=c?'Edit — '+c.name:'Add customer';
+  document.getElementById('emDelete').style.display=c?'inline-block':'none';
+  const v=(id,val)=>document.getElementById(id).value=val==null?'':val;
+  v('emName',c?c.name:''); v('emAddr',c?c.addr:''); v('emStatus',c?c.status:'notready');
+  v('emMark',c&&c.mark?c.mark:''); v('emCompany',c?c.company:'Muscle Concrete');
+  v('emPhone',c?c.phone:''); v('emMood',c&&c.mood!=null?String(c.mood):'');
+  v('emPrep',c?c.prep:''); v('emReady',c?c.ready:''); v('emLead',c&&c.leadDays!=null?c.leadDays:'');
+  v('emBC',c?c.basecamp:''); v('emNote',c?c.note:'');
+  editModal.classList.add('show');
+}
+function closeEditor(){ editModal.classList.remove('show'); EDIT_C=null; }
+document.getElementById('emX').onclick=closeEditor;
+document.getElementById('emCancel').onclick=closeEditor;
+document.getElementById('emSave').onclick=async ()=>{
+  const g=id=>document.getElementById(id).value.trim();
+  const fields={
+    name:g('emName'), address:g('emAddr'), status:g('emStatus'),
+    mark:g('emMark')||null, company:g('emCompany')||'Muscle Concrete',
+    phone:g('emPhone')||null, mood:g('emMood')?+g('emMood'):null,
+    prep_date:g('emPrep')||null, ready_date:g('emReady')||null,
+    lead_days:g('emLead')?+g('emLead'):null,
+    basecamp_link:g('emBC')||null, note:g('emNote')||null
+  };
+  if(!fields.name){ alert('Name is required.'); return; }
+  const btn=document.getElementById('emSave'); btn.disabled=true; btn.textContent='Saving…';
+  let ok=false, saved=null;
+  if(EDIT_C){
+    const addrChanged=EDIT_C.addr!==fields.address;
+    ok=await sbUpdate(EDIT_C,fields);
+    if(ok&&addrChanged&&fields.address){ // re-locate on address change
+      const p=await geocode(fields.address);
+      if(p) await sbUpdate(EDIT_C,{lat:p.lat,lng:p.lng},true);
+    }
+    saved=EDIT_C;
+  } else {
+    if(fields.address){
+      const p=await geocode(fields.address);
+      if(p){ fields.lat=p.lat; fields.lng=p.lng; }
+    }
+    saved=await sbInsert(fields);
+    ok=!!saved;
+    if(ok) MASTER_LIST.push(saved);
+  }
+  btn.disabled=false; btn.textContent='Save';
+  if(ok){
+    closeEditor(); applyFilters();
+    if(saved&&isFinite(saved.lat)){ map.flyTo([saved.lat,saved.lng],Math.max(map.getZoom(),8),{duration:.6}); openTicket(saved); }
+  }
+};
+document.getElementById('emDelete').onclick=async ()=>{
+  if(!EDIT_C) return;
+  if(!confirm('Delete '+EDIT_C.name+' permanently? (Use status Completed for finished jobs — delete is for mistakes only.)')) return;
+  if(await sbDelete(EDIT_C)){
+    MASTER_LIST=MASTER_LIST.filter(x=>x!==EDIT_C);
+    closeEditor(); applyFilters();
+    document.getElementById('panel').classList.remove('open');
+  }
+};
+const addBtnCtl=L.control({position:'topleft'});
+addBtnCtl.onAdd=function(){
+  const d=L.DomUtil.create('div','leaflet-bar');
+  d.innerHTML='<a href="#" id="addBtn" title="Add customer" role="button" aria-label="Add customer">＋</a>';
+  L.DomEvent.disableClickPropagation(d);
+  d.querySelector('a').onclick=e=>{e.preventDefault(); openEditor(null);};
+  return d;
+};
+addBtnCtl.addTo(map);
+
 // ===== Calendar data: read the Orders calendar and fuse it with the map =====
 let CAL_EVENTS=[], CAL_STATE='loading';
 function icsUnfold(t){ return t.replace(/\r\n[ \t]/g,'').replace(/\n[ \t]/g,''); }
@@ -1100,6 +1352,7 @@ document.getElementById('wrap').appendChild(calPanel);
 L.DomEvent.disableClickPropagation(calPanel);
 document.getElementById('calClose').onclick=()=>{document.getElementById('calPanel').classList.remove('show');document.getElementById('calBtn').classList.remove('active');};
 
+const LEAD_DAYS_DEFAULT=21; // company lead time in days — give me the real number for a one-line tune
 // ===== Runs — crew-colored job strings =====
 const CREWS=[
   {name:'Red',hex:'#ff4d4d'},{name:'Green',hex:'#37d67a'},{name:'Blue',hex:'#4a95e8'},
@@ -1305,10 +1558,13 @@ async function buildInsights(){
   const permits=L2.filter(c=>/permit/i.test(c.note||''));
   if(permits.length>=3) pushInsight(permits.length+' jobs are waiting on permits — a quick status sweep could unlock ready work.');
   L2.forEach(c=>{ if(c.ready&&c.readyDays==null){ const rd=new Date(c.ready); if(!isNaN(rd)) c.readyDays=Math.max(0,Math.round((Date.now()-rd)/86400e3)); } });
-  const aging=L2.filter(c=>c.readyDays!=null&&c.readyDays>=14&&['inhouse','jrcrew','both'].includes(c.status))
-    .sort((a,b)=>b.readyDays-a.readyDays);
-  if(aging.length) pushInsight(aging.length+' job'+(aging.length>1?'s':'')+' ready 2+ weeks with no pour slot: '+
-    aging.slice(0,3).map(c=>c.name+' ('+c.readyDays+'d)').join(', ')+(aging.length>3?' +'+(aging.length-3):'')+' — booked revenue waiting on the board.',aging.some(c=>c.readyDays>=21));
+  const lateList=L2.filter(c=>c.readyDays!=null&&['inhouse','jrcrew','both'].includes(c.status))
+    .map(c=>({c,over:c.readyDays-(c.leadDays||LEAD_DAYS_DEFAULT)}))
+    .sort((a,b)=>b.over-a.over);
+  const past=lateList.filter(x=>x.over>0), near=lateList.filter(x=>x.over>=-5&&x.over<=0);
+  if(past.length) pushInsight(past.length+' job'+(past.length>1?'s':'')+' PAST lead time: '+
+    past.slice(0,3).map(x=>x.c.name+' (+'+x.over+'d)').join(', ')+(past.length>3?' +'+(past.length-3):'')+' — these customers were promised sooner.',true);
+  else if(near.length) pushInsight(near.length+' job'+(near.length>1?'s':'')+' inside 5 days of the lead-time deadline — get them slotted this week.');
   const noPrep=L2.filter(c=>c.mark==='P'&&!c.prep);
   if(noPrep.length) pushInsight(noPrep.length+' pour-only job'+(noPrep.length>1?'s':'')+' missing a Prep Date in the sheet — add it to enable footer-age tracking.');
   // --- fun facts: live numbers off the board, different mix each session ---
@@ -1783,6 +2039,7 @@ function analyzeWx(c,daily,hourly,grid,pastRain,ext,opts){
     const slots=periods.filter(p=>p.startTime.slice(0,10)===k);
     const temps=slots.map(s=>s.temperature);
     const hi=temps.length?Math.max(...temps):null, lo=temps.length?Math.min(...temps):null;
+    const popMax=Math.max(0,...slots.map(s=>(s.probabilityOfPrecipitation&&s.probabilityOfPrecipitation.value)||0));
     const amt=hasQpf?qpfBetween(qpf,d0,d24):0;
     const morn=hasQpf?qpfBetween(qpf,d0,new Date(d0.getTime()+14*3600e3)):0; // midnight–2pm: rain here soaks a pour morning
     // when does meaningful rain start? (site-local hour)
@@ -1794,7 +2051,7 @@ function analyzeWx(c,daily,hourly,grid,pastRain,ext,opts){
     const skyAvg=seriesAvg(sky,new Date(d0.getTime()+9*3600e3),new Date(d0.getTime()+17*3600e3));
     // overnight into NEXT day: 18:00 -> +1d 10:00
     const oNight=hasQpf?qpfBetween(qpf,new Date(d0.getTime()+18*3600e3),new Date(d0.getTime()+34*3600e3)):0;
-    return {key:k,d0,hi,lo,amt,morn,rainStart,skyAvg,oNight,
+    return {key:k,d0,hi,lo,amt,morn,rainStart,skyAvg,oNight,popMax,
       dow:new Date(k+'T12:00:00').toLocaleDateString([],{weekday:'short'})};
   });
   // same-day dispatch never happens: today is context, not a schedulable day
@@ -1826,21 +2083,25 @@ function analyzeWx(c,daily,hourly,grid,pastRain,ext,opts){
   // a crew only rolls when both models agree it's dry.
   let mdShared=null;
   if(ext&&ext.length){ try{ mdShared=metnoDaily(ext,off); }catch(e){} }
+  let euroLive=false;
   if(mdShared){
     days.forEach(d=>{
       const m=mdShared[d.key]; if(!m) return;
+      euroLive=true;
       const mMorn=(m.hours||[]).filter(x=>x.h<14).reduce((t,x)=>t+x.amt,0);
-      if(m.amt-d.amt>=0.2||(d.amt<0.1&&m.amt>=0.2)){
-        d.split={nws:d.amt,euro:m.amt};
-        d.amt=Math.max(d.amt,m.amt);
-        d.morn=Math.max(d.morn,mMorn);
-        if(d.rainStart==null){
-          const fh=(m.hours||[]).slice().sort((a,b)=>a.h-b.h).find(x=>x.amt>=0.02);
-          if(fh) d.rainStart=fh.h;
-        }
+      if(Math.abs(m.amt-d.amt)>=0.2) d.split={nws:d.amt,euro:m.amt};
+      d.amt=Math.max(d.amt,m.amt);            // always the wetter source
+      d.morn=Math.max(d.morn,mMorn);
+      if(d.rainStart==null){
+        const fh=(m.hours||[]).slice().sort((a,b)=>a.h-b.h).find(x=>x.amt>=0.02);
+        if(fh) d.rainStart=fh.h;
       }
     });
   }
+  // data-health: NWS amounts missing while its own rain chances are high = broken feed, not dry skies
+  const qpfBroken=days.some(d=>d.popMax>=55&&d.amt<0.08&&!(mdShared&&mdShared[d.key]));
+  const dataNote=(!euroLive&&qpfBroken)?'⚠ Rain amounts unavailable from both sources — graded on rain CHANCES only; verify manually.'
+    :(!euroLive?'Euro model unreachable — NWS only this load.':null);
   // extend beyond NWS with MET Norway estimate days (marked est:true)
   if(ext&&ext.length){
     try{
@@ -1893,6 +2154,7 @@ function analyzeWx(c,daily,hourly,grid,pastRain,ext,opts){
     else if(d.hi!=null&&d.hi<38){ g='freeze'; why.push('too cold ('+d.hi+'° high)'); }
     else if(d.morn>=0.1||(d.amt>=0.25&&(d.rainStart==null||d.rainStart<15))){ g='rain'; why.push(fmtIn(d.amt)+' rain'); }
     else if(d.amt>=0.08&&d.rainStart!=null&&d.rainStart>=15){ g='early'; why.push('rain in around '+(d.rainStart%12||12)+'pm — start early'); }
+    else if(d.amt<0.1&&d.popMax>=60){ g='marginal'; why.push(d.popMax+'% rain chance — amounts unclear, treat cautious'); }
     else if(eff>0.7){ g='wet'; why.push('ground too wet'); }
     else if(eff>0.25){ g='marginal'; why.push('ground still drying'); }
     else { g='good'; if(d.amt>0&&d.amt<0.08) why.push('light sprinkle possible — workable'); }
@@ -2042,6 +2304,7 @@ function analyzeWx(c,daily,hourly,grid,pastRain,ext,opts){
   if(c.readyDays!=null&&c.readyDays>=14&&['inhouse','jrcrew','both'].includes(c.status)&&windowTxt)
     windowTxt+=' Ready '+c.readyDays+' days without a slot — prioritize.';
   if(days.some(d=>d.est)&&windowTxt&&/~/.test(windowTxt)) windowTxt+=' ~ = extended model estimate (MET Norway), roughly 60–70% reliable at that range — pencil it, confirm as the day firms.';
+  if(typeof dataNote!=='undefined'&&dataNote) windowTxt=(windowTxt?windowTxt+' ':'')+dataNote;
   if(modeNote) windowTxt=(windowTxt?windowTxt+' ':'')+modeNote;
   if(typeof NEXT_MODE!=='undefined'&&NEXT_MODE&&!days.length){ chip='NEXT WEEK — NO DATA YET'; cls='warn'; }
   return {chip:(typeof NEXT_MODE!=='undefined'&&NEXT_MODE&&days.length?'NEXT WK: ':'')+chip,cls,text:windowTxt,ctx:ctx.slice(0,2).join(' · '),prefix,days};
@@ -2050,12 +2313,17 @@ function cap(s){return s.charAt(0).toUpperCase()+s.slice(1);}
 // extended DETAIL forecast: MET Norway (free, commercial OK w/ attribution) reaches ~9-10 days,
 // used only for days beyond NWS coverage and always marked as estimates
 async function fetchMetNo(lat,lng){
-  try{
-    const r=await fetch('https://api.met.no/weatherapi/locationforecast/2.0/compact?lat='+lat.toFixed(4)+'&lon='+lng.toFixed(4));
-    if(!r.ok) return null;
-    const j=await r.json();
-    return (j.properties&&j.properties.timeseries)||null;
-  }catch(e){ return null; }
+  for(const u of ['https://api.met.no/weatherapi/locationforecast/2.0/compact?lat='+lat.toFixed(4)+'&lon='+lng.toFixed(4),
+                  '/api/metno?lat='+lat.toFixed(4)+'&lng='+lng.toFixed(4)]){
+    try{
+      const r=await fetch(u);
+      if(!r.ok) continue;
+      const j=await r.json();
+      const ts=(j.properties&&j.properties.timeseries)||null;
+      if(ts&&ts.length) return ts;
+    }catch(e){}
+  }
+  return null;
 }
 function metnoDaily(ts,off){ // -> {key:{amt,morn,hi,lo,skySum,skyN,hours:[{h,amt}]}}
   const offMin=(off[0]==='-'?-1:1)*(+off.slice(1,3)*60+ +off.slice(4,6));
@@ -2187,14 +2455,30 @@ async function openTicket(c){
   if(mChip){ md.style.display='inline'; md.textContent=mChip.e+' '+mChip.label;
     md.style.background='transparent'; md.style.border='1px solid '+mChip.hex; md.style.color=mChip.hex; }
   else{ md.style.display='none'; }
+  document.getElementById('tkEdit').onclick=()=>openEditor(c);
+  document.getElementById('tkComplete').onclick=async ()=>{
+    if(!confirm('Mark '+c.name+' as Completed? The pin will leave the map (findable via search or the Show completed toggle).')) return;
+    if(await sbUpdate(c,{status:'completed'})){ applyFilters(); document.getElementById('panel').classList.remove('open'); }
+  };
+  document.getElementById('tkComplete').style.display=(c.status==='completed'||!c.id)?'none':'inline-block';
+  document.getElementById('tkEdit').style.display=c.id?'inline-block':'none';
   document.getElementById('pCo').textContent='Order via '+(c.company||'Muscle Concrete');
+  const ph=document.getElementById('pPhone');
+  if(c.phone){
+    const digits=c.phone.replace(/[^\d+]/g,'');
+    ph.style.display='block';
+    ph.innerHTML='📞 <a href="tel:'+esc(digits)+'">'+esc(c.phone)+'</a>';
+  } else ph.style.display='none';
   const rl=document.getElementById('pReady');
   c.readyDays=null;
   if(c.ready){ const rd=new Date(c.ready); if(!isNaN(rd)){ c.readyDays=Math.max(0,Math.round((Date.now()-rd)/86400e3)); } }
   if(c.readyDays!=null){
+    const lead=c.leadDays||LEAD_DAYS_DEFAULT;
+    const left=lead-c.readyDays;
     rl.style.display='block';
-    rl.textContent='Ready since '+new Date(c.ready).toLocaleDateString([],{month:'short',day:'numeric'})+' — '+c.readyDays+' day'+(c.readyDays===1?'':'s')+' waiting';
-    rl.style.color=c.readyDays>=14?'#e05445':c.readyDays>=7?'#f0d020':'var(--muted)';
+    rl.textContent='Ready '+new Date(c.ready).toLocaleDateString([],{month:'short',day:'numeric'})+
+      ' ('+c.readyDays+'d) — '+(left>=0?left+' days left in lead time':Math.abs(left)+' days PAST lead time');
+    rl.style.color=left<0?'#e05445':left<=5?'#f0d020':'var(--muted)';
   } else rl.style.display='none';
   const cl=document.getElementById('pCal');
   const evs=(typeof eventsFor==='function')?eventsFor(c):[];
