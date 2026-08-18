@@ -405,6 +405,7 @@
         <a id="pMap" href="#" target="_blank" rel="noopener"> Apple Maps ↗</a>
         <a id="pDir" href="#" target="_blank" rel="noopener">Directions ↗</a>
         <a id="pBC" href="#" target="_blank" rel="noopener" style="display:none">🏕 Basecamp ↗</a>
+        <button class="tt-btn" id="pEditBtn">✎ Edit</button>
       </div>
     </div>
     <div id="pBody"><div class="loading">Select a pin to load the forecast.</div></div>
@@ -2270,7 +2271,9 @@ async function fetchPastRain(lat,lng,daysBack){
 // ========================================================================================
 
 // Phone / Ready date / Finished controls in the ticket head.
+// View mode shows clean info only; the ✎ Edit button reveals the inputs.
 // Sheet values load automatically; anything typed here saves on this device and fills gaps.
+let TICKET_EDIT=false;
 function readyISO(c){
   if(!c.ready) return '';
   const d=new Date(c.ready);
@@ -2279,21 +2282,29 @@ function readyISO(c){
   return new Date(d.getTime()-off).toISOString().slice(0,10);
 }
 function renderTicketTools(c){
-  // phone
   const ph=document.getElementById('ttPhone');
-  const digits=String(c.phone||'').replace(/[^\d+]/g,'');
-  ph.innerHTML=c.phone
-    ? '☎ <a href="tel:'+esc(digits)+'">'+esc(c.phone)+'</a> <button class="tt-btn" id="phEdit" title="Edit phone">✎</button>'
-    : '☎ <button class="tt-btn" id="phEdit">Add phone #</button>';
-  document.getElementById('phEdit').onclick=()=>{
-    ph.innerHTML='☎ <input type="tel" id="phIn" placeholder="336-555-0100" size="14" value="'+esc(c.phone||'')+'"> <button class="tt-btn" id="phSave">Save</button>';
-    const inp=document.getElementById('phIn');
-    document.getElementById('phSave').onclick=()=>{ c.phone=inp.value.trim(); setLocal(c,{phone:c.phone||null}); renderTicketTools(c); };
-    inp.onkeydown=e=>{ if(e.key==='Enter') document.getElementById('phSave').click(); };
-    inp.focus();
-  };
-  // ready date + lead-time setting
   const rr=document.getElementById('ttReady');
+  const dd=document.getElementById('ttDone');
+  const eb=document.getElementById('pEditBtn');
+  if(eb) eb.textContent=TICKET_EDIT?'✕ Done':'✎ Edit';
+
+  if(!TICKET_EDIT){ // ----- view mode: info only, no inputs -----
+    const digits=String(c.phone||'').replace(/[^\d+]/g,'');
+    if(c.phone){ ph.style.display='flex'; ph.innerHTML='☎ <a href="tel:'+esc(digits)+'">'+esc(c.phone)+'</a>'; }
+    else ph.style.display='none';
+    rr.style.display='none';
+    if(c.done){ dd.style.display='flex'; dd.innerHTML='<span>✓ Marked finished'+(localFor(c).done?'':' in the sheet')+'</span>'; }
+    else dd.style.display='none';
+    return;
+  }
+
+  // ----- edit mode -----
+  ph.style.display='flex'; rr.style.display='flex'; dd.style.display='flex';
+  ph.innerHTML='☎ <input type="tel" id="phIn" placeholder="336-555-0100" size="14" value="'+esc(c.phone||'')+'"> <button class="tt-btn" id="phSave">Save</button>';
+  const phIn=document.getElementById('phIn');
+  document.getElementById('phSave').onclick=()=>{ c.phone=phIn.value.trim(); setLocal(c,{phone:c.phone||null}); renderTicketTools(c); };
+  phIn.onkeydown=e=>{ if(e.key==='Enter') document.getElementById('phSave').click(); };
+
   rr.innerHTML='Ready: <input type="date" id="rdIn" value="'+readyISO(c)+'"> <button class="tt-btn" id="rdSave">Save</button>'+
     '<span style="margin-left:8px">Lead time <input type="number" id="ldIn" min="1" max="365" value="'+LEAD_DAYS+'"> days</span>';
   document.getElementById('rdSave').onclick=()=>{
@@ -2306,8 +2317,7 @@ function renderTicketTools(c){
     try{ localStorage.setItem('mcLeadDays',String(LEAD_DAYS)); }catch(err){}
     openTicket(c);
   };
-  // finished / hide
-  const dd=document.getElementById('ttDone');
+
   if(c.done){
     const sheetDone=!localFor(c).done;
     dd.innerHTML='<button class="tt-btn" id="doneBtn">↩ Restore to map</button> <span>marked finished'+(sheetDone?' in the sheet':'')+'</span>';
@@ -2366,7 +2376,9 @@ async function openTicket(c){
   const bc=document.getElementById('pBC');
   if(c.basecamp&&/^https?:\/\//i.test(c.basecamp)){ bc.href=c.basecamp; bc.style.display='inline'; }
   else bc.style.display='none';
+  TICKET_EDIT=false;
   renderTicketTools(c);
+  document.getElementById('pEditBtn').onclick=()=>{ TICKET_EDIT=!TICKET_EDIT; renderTicketTools(c); };
   const body=document.getElementById('pBody');
   body.innerHTML='<div class="loading">Loading NWS forecast…</div>';
   panel.classList.add('open');
