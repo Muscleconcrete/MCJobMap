@@ -227,6 +227,24 @@
   .tt-btn:hover{border-color:var(--accent);color:var(--accent)}
   .tt-btn.danger:hover{border-color:#e05445;color:#e05445}
   .wb-lead{font-size:10px;font-weight:600;white-space:nowrap;margin-left:4px}
+  /* customer edit box */
+  #editOverlay{position:absolute;inset:0;z-index:1400;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center}
+  #editOverlay.show{display:flex}
+  #editBox{width:350px;max-width:92vw;max-height:88%;overflow-y:auto;background:var(--bg2);border:1px solid var(--accent);border-radius:12px;box-shadow:0 12px 40px rgba(0,0,0,.65);display:flex;flex-direction:column}
+  .eb-head{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;font-family:'Barlow Condensed';font-weight:700;font-size:18px;letter-spacing:.05em;text-transform:uppercase;color:var(--accent);border-bottom:1px dashed var(--line);flex:none}
+  .eb-head button{border:1px solid var(--line);background:none;border-radius:6px;width:26px;height:26px;color:var(--muted);cursor:pointer}
+  .eb-head button:hover{border-color:var(--accent);color:var(--accent)}
+  .eb-body{padding:12px 14px;display:flex;flex-direction:column;gap:10px;overflow-y:auto}
+  .eb-f label{display:block;font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px}
+  .eb-f input,.eb-f select,.eb-f textarea{width:100%;background:var(--card);border:1px solid var(--line);border-radius:8px;color:var(--text);padding:7px 10px;font-size:13px;font-family:'Inter',sans-serif;box-sizing:border-box}
+  .eb-f input:focus,.eb-f select:focus,.eb-f textarea:focus{border-color:var(--accent);outline:none}
+  .eb-f textarea{min-height:64px;resize:vertical}
+  .eb-2col{display:flex;gap:10px}
+  .eb-2col .eb-f{flex:1;min-width:0}
+  .eb-foot{display:flex;gap:8px;padding:12px 14px;border-top:1px dashed var(--line);flex-wrap:wrap;flex:none}
+  .eb-save{flex:1;border:1px solid var(--accent);background:var(--accent);color:#131313;border-radius:8px;padding:9px 0;font-weight:700;cursor:pointer;font-size:13px;font-family:'Inter',sans-serif}
+  .eb-save:hover{filter:brightness(1.08)}
+  .eb-note{font-size:10.5px;color:var(--muted);padding:0 14px 12px;line-height:1.5}
 
   .schedcall{background:rgba(244,180,26,.05);border-left:3px solid var(--accent)}
   .sc-chip{display:inline-block;font-family:'Barlow Condensed';font-weight:700;font-size:16px;letter-spacing:.06em;
@@ -371,6 +389,7 @@
 <div id="wrap">
   <div id="map"></div>
   <div id="dataBanner"><span id="dbText"></span><button id="dbRetry">Retry</button></div>
+  <div id="editOverlay"><div id="editBox"></div></div>
   <div id="legend" aria-label="Pin color code">
     <div class="lg-title">Color Code</div>
     <div class="lg-grid">
@@ -778,10 +797,19 @@ function stateOf(c){
 function milesBetween(a,b){ return map.distance(L.latLng(a.lat,a.lng),L.latLng(b.lat,b.lng))/1609.344; }
 function applyFilters(){
   let list=MASTER_LIST.slice();
-  list.forEach(c=>{ const o=localFor(c);
-    if(o.phone&&!c.phone) c.phone=o.phone;
-    if(o.ready&&!c.ready) c.ready=o.ready;
-    if(o.done) c.done=true; });
+  list.forEach(c=>{
+    if(!c._sheet) c._sheet={status:c.status,rawStatus:c.rawStatus,mark:c.mark,phone:c.phone||'',ready:c.ready||'',note:c.note||'',mood:c.mood??null,done:!!c.done};
+    const sh=c._sheet, o=localFor(c);
+    const val=(ov,shv)=>ov==null?shv:(ov==='__clear__'?'':ov);
+    c.status=o.status||sh.status;
+    c.rawStatus=o.status?(STATUS[o.status]?STATUS[o.status].label:o.status):sh.rawStatus;
+    c.mark=o.mark==null?sh.mark:(o.mark==='__clear__'?undefined:o.mark);
+    c.phone=val(o.phone,sh.phone);
+    c.ready=val(o.ready,sh.ready);
+    c.note=val(o.note,sh.note);
+    c.mood=o.mood==null?sh.mood:(o.mood==='__clear__'?null:+o.mood);
+    c.done=sh.done||!!o.done;
+  });
   const finishedN=list.filter(c=>c.done).length;
   if(!FILTERS.showDone) list=list.filter(c=>!c.done);
   FILTERS._finishedN=finishedN;
@@ -2270,13 +2298,10 @@ async function fetchPastRain(lat,lng,daysBack){
 }
 // ========================================================================================
 
-// Phone / Ready date / Finished controls in the ticket head.
-// View mode shows clean info only; the ✎ Edit button reveals the inputs.
-// Sheet values load automatically; anything typed here saves on this device and fills gaps.
-let TICKET_EDIT=false;
-function readyISO(c){
-  if(!c.ready) return '';
-  const d=new Date(c.ready);
+// Ticket head is view-only. The ✎ Edit button opens the full edit box for the customer.
+function readyISO(v){
+  if(!v) return '';
+  const d=new Date(v);
   if(isNaN(d)) return '';
   const off=d.getTimezoneOffset()*60e3;
   return new Date(d.getTime()-off).toISOString().slice(0,10);
@@ -2285,53 +2310,84 @@ function renderTicketTools(c){
   const ph=document.getElementById('ttPhone');
   const rr=document.getElementById('ttReady');
   const dd=document.getElementById('ttDone');
-  const eb=document.getElementById('pEditBtn');
-  if(eb) eb.textContent=TICKET_EDIT?'✕ Done':'✎ Edit';
+  rr.style.display='none';
+  const digits=String(c.phone||'').replace(/[^\d+]/g,'');
+  if(c.phone){ ph.style.display='flex'; ph.innerHTML='☎ <a href="tel:'+esc(digits)+'">'+esc(c.phone)+'</a>'; }
+  else ph.style.display='none';
+  if(c.done){ dd.style.display='flex'; dd.innerHTML='<span>✓ Marked finished'+(localFor(c).done?'':' in the sheet')+'</span>'; }
+  else dd.style.display='none';
+}
 
-  if(!TICKET_EDIT){ // ----- view mode: info only, no inputs -----
-    const digits=String(c.phone||'').replace(/[^\d+]/g,'');
-    if(c.phone){ ph.style.display='flex'; ph.innerHTML='☎ <a href="tel:'+esc(digits)+'">'+esc(c.phone)+'</a>'; }
-    else ph.style.display='none';
-    rr.style.display='none';
-    if(c.done){ dd.style.display='flex'; dd.innerHTML='<span>✓ Marked finished'+(localFor(c).done?'':' in the sheet')+'</span>'; }
-    else dd.style.display='none';
-    return;
-  }
+// ===== Full customer edit box =====
+function openEditBox(c){
+  const box=document.getElementById('editBox');
+  const sh=c._sheet||{};
+  const statusOpts=Object.entries(STATUS).map(([k,v])=>
+    '<option value="'+k+'"'+(c.status===k?' selected':'')+'>'+v.label+'</option>').join('');
+  const moodOpts='<option value="">—</option>'+[5,4,3,2,1].map(m=>
+    '<option value="'+m+'"'+(c.mood===m?' selected':'')+'>'+MOODS[m].e+' '+MOODS[m].label+'</option>').join('');
+  box.innerHTML=`
+    <div class="eb-head"><span>Edit — ${esc(c.name)}</span><button id="ebClose" aria-label="Close">✕</button></div>
+    <div class="eb-body">
+      <div class="eb-2col">
+        <div class="eb-f"><label>Status</label><select id="ebStatus">${statusOpts}</select></div>
+        <div class="eb-f"><label>Mark</label><select id="ebMark">
+          <option value=""${!c.mark?' selected':''}>None</option>
+          <option value="P"${c.mark==='P'?' selected':''}>P — Pour only</option>
+          <option value="$"${c.mark==='$'?' selected':''}>$ — Financed</option>
+        </select></div>
+      </div>
+      <div class="eb-f"><label>Phone #</label><input type="tel" id="ebPhone" placeholder="336-555-0100" value="${esc(c.phone||'')}"></div>
+      <div class="eb-2col">
+        <div class="eb-f"><label>Ready date</label><input type="date" id="ebReady" value="${readyISO(c.ready)}"></div>
+        <div class="eb-f"><label>Lead time (days)</label><input type="number" id="ebLead" min="1" max="365" value="${LEAD_DAYS}"></div>
+      </div>
+      <div class="eb-f"><label>Customer mood</label><select id="ebMood">${moodOpts}</select></div>
+      <div class="eb-f"><label>Note</label><textarea id="ebNote">${esc(c.note||'')}</textarea></div>
+    </div>
+    <div class="eb-foot">
+      <button class="eb-save" id="ebSave">Save</button>
+      <button class="tt-btn" id="ebReset" title="Drop all edits made on this device and go back to the sheet's values">↺ Reset to sheet</button>
+      ${c.done
+        ? '<button class="tt-btn" id="ebDone">↩ Restore to map</button>'
+        : '<button class="tt-btn danger" id="ebDone">✓ Finished — hide</button>'}
+    </div>
+    <div class="eb-note">Edits save on this device and override the sheet for you. The Google Sheet stays the master for the whole team — put anything permanent there.</div>`;
+  document.getElementById('editOverlay').classList.add('show');
+  const close=()=>document.getElementById('editOverlay').classList.remove('show');
+  document.getElementById('ebClose').onclick=close;
+  document.getElementById('editOverlay').onclick=e=>{ if(e.target.id==='editOverlay') close(); };
 
-  // ----- edit mode -----
-  ph.style.display='flex'; rr.style.display='flex'; dd.style.display='flex';
-  ph.innerHTML='☎ <input type="tel" id="phIn" placeholder="336-555-0100" size="14" value="'+esc(c.phone||'')+'"> <button class="tt-btn" id="phSave">Save</button>';
-  const phIn=document.getElementById('phIn');
-  document.getElementById('phSave').onclick=()=>{ c.phone=phIn.value.trim(); setLocal(c,{phone:c.phone||null}); renderTicketTools(c); };
-  phIn.onkeydown=e=>{ if(e.key==='Enter') document.getElementById('phSave').click(); };
-
-  rr.innerHTML='Ready: <input type="date" id="rdIn" value="'+readyISO(c)+'"> <button class="tt-btn" id="rdSave">Save</button>'+
-    '<span style="margin-left:8px">Lead time <input type="number" id="ldIn" min="1" max="365" value="'+LEAD_DAYS+'"> days</span>';
-  document.getElementById('rdSave').onclick=()=>{
-    const v=document.getElementById('rdIn').value;
-    c.ready=v||''; setLocal(c,{ready:v||null});
-    openTicket(c); // refresh the waiting line + countdown chip
+  document.getElementById('ebSave').onclick=()=>{
+    const v=id=>document.getElementById(id).value;
+    // store only fields that differ from the sheet; '__clear__' = user blanked a sheet value
+    const diff=(nv,sv)=>nv===(sv||'')?null:(nv||'__clear__');
+    setLocal(c,{
+      status:(v('ebStatus')!==sh.status)?v('ebStatus'):null,
+      mark:(v('ebMark')!==(sh.mark||''))?(v('ebMark')||'__clear__'):null,
+      phone:diff(v('ebPhone').trim(),sh.phone),
+      ready:diff(v('ebReady'),sh.ready?readyISO(sh.ready):''),
+      note:diff(v('ebNote').trim(),sh.note),
+      mood:(v('ebMood')!==(sh.mood!=null?String(sh.mood):''))?(v('ebMood')||'__clear__'):null
+    });
+    LEAD_DAYS=Math.max(1,+v('ebLead')||30);
+    try{ localStorage.setItem('mcLeadDays',String(LEAD_DAYS)); }catch(e){}
+    close(); applyFilters(); openTicket(c);
   };
-  document.getElementById('ldIn').onchange=e=>{
-    LEAD_DAYS=Math.max(1,+e.target.value||30);
-    try{ localStorage.setItem('mcLeadDays',String(LEAD_DAYS)); }catch(err){}
-    openTicket(c);
+  document.getElementById('ebReset').onclick=()=>{
+    setLocal(c,{status:null,mark:null,phone:null,ready:null,note:null,mood:null,done:null});
+    close(); applyFilters(); openTicket(c);
   };
-
-  if(c.done){
-    const sheetDone=!localFor(c).done;
-    dd.innerHTML='<button class="tt-btn" id="doneBtn">↩ Restore to map</button> <span>marked finished'+(sheetDone?' in the sheet':'')+'</span>';
-    document.getElementById('doneBtn').onclick=()=>{
-      if(sheetDone){ alert('This customer is marked Done in the Google Sheet — clear that cell in the sheet to restore them.'); return; }
-      setLocal(c,{done:null}); c.done=false; applyFilters(); renderTicketTools(c);
-    };
-  } else {
-    dd.innerHTML='<button class="tt-btn danger" id="doneBtn">✓ Finished — hide from map</button>';
-    document.getElementById('doneBtn').onclick=()=>{
-      setLocal(c,{done:1}); c.done=true; applyFilters();
-      panel.classList.remove('open');
-    };
-  }
+  document.getElementById('ebDone').onclick=()=>{
+    if(c.done){
+      if(!localFor(c).done){ alert('This customer is marked Done in the Google Sheet — clear that cell in the sheet to restore them.'); return; }
+      setLocal(c,{done:null}); c.done=false;
+      close(); applyFilters(); openTicket(c);
+    } else {
+      setLocal(c,{done:1}); c.done=true;
+      close(); applyFilters(); panel.classList.remove('open');
+    }
+  };
 }
 
 let reqToken=0;
@@ -2376,9 +2432,8 @@ async function openTicket(c){
   const bc=document.getElementById('pBC');
   if(c.basecamp&&/^https?:\/\//i.test(c.basecamp)){ bc.href=c.basecamp; bc.style.display='inline'; }
   else bc.style.display='none';
-  TICKET_EDIT=false;
   renderTicketTools(c);
-  document.getElementById('pEditBtn').onclick=()=>{ TICKET_EDIT=!TICKET_EDIT; renderTicketTools(c); };
+  document.getElementById('pEditBtn').onclick=()=>openEditBox(c);
   const body=document.getElementById('pBody');
   body.innerHTML='<div class="loading">Loading NWS forecast…</div>';
   panel.classList.add('open');
