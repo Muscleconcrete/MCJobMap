@@ -167,6 +167,7 @@
   .wb-dot{width:9px;height:9px;border-radius:50%;flex:none}
   .wb-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .wb-name b{color:var(--accent);font-weight:700}
+  .wb-lead{font-size:10px;font-weight:600;white-space:nowrap;margin-left:4px}
   .wb-chip{font-family:'Barlow Condensed';font-weight:700;font-size:11px;letter-spacing:.05em;padding:2px 7px;border-radius:4px;white-space:nowrap}
   .wb-chip.ok{border:1px solid #2eb673;color:#2eb673}
   .wb-chip.warn{border:1px solid #f0d020;color:#f0d020}
@@ -389,7 +390,7 @@
 
 <div id="wrap">
   <div id="map"></div>
-  <div id="dataBanner"><span id="dbText"></span><button id="dbRetry">Retry</button></div>
+  <div id="dataBanner"><span id="dbText"></span><button id="dbRetry">Retry</button><button id="dbClose" aria-label="Dismiss">✕</button></div>
   <div id="legend" aria-label="Pin color code">
     <div class="lg-title">Color Code</div>
     <div class="lg-grid">
@@ -672,14 +673,18 @@ function addMarkers(list){
     });
   });
 }
-function dataBanner(msg,level){
+let dbTimer=null;
+function dataBanner(msg,level,autoHideMs){
   const b=document.getElementById('dataBanner');
+  if(dbTimer){ clearTimeout(dbTimer); dbTimer=null; }
   b.classList.toggle('warnlvl',level==='warn');
   if(!msg){ b.classList.remove('show'); return; }
   document.getElementById('dbText').textContent=msg;
   b.classList.add('show');
+  if(autoHideMs) dbTimer=setTimeout(()=>b.classList.remove('show'),autoHideMs);
 }
 document.getElementById('dbRetry').onclick=()=>{ dataBanner(null); loadCustomersSB(); };
+document.getElementById('dbClose').onclick=()=>dataBanner(null);
 function loadSheetViaScript(){ // Google's gviz JSON endpoint invoked as a script: works from file://
   return new Promise((resolve,reject)=>{
     const cleanup=()=>{ delete window.google; s.remove(); clearTimeout(tm); };
@@ -761,7 +766,7 @@ async function loadCustomers(){
       if(p){ c.lat=p.lat; c.lng=p.lng; list.push(c); MASTER_LIST=list; applyFilters(); }
       else unplaced.push(c.name);
     }
-    if(unplaced.length) dataBanner('⚠ Not placed (address lookup failed): '+unplaced.join(', ')+' — fix the address or add Lat/Lng in the sheet, then Retry.','warn');
+    if(unplaced.length) dataBanner('⚠ Not placed (address lookup failed): '+unplaced.join(', ')+' — open the customer and fix the address or paste coordinates.','warn',15000);
     if(!list.length){ MASTER_LIST=SAMPLE_CUSTOMERS; applyFilters(); dataBanner('Sheet reached but no customer rows found — showing sample pins.'); }
     else dataBanner(null);
   }catch(e){
@@ -825,7 +830,7 @@ async function loadCustomersSB(){
         sbUpdate(c,{lat:p.lat,lng:p.lng},true); // remember coordinates permanently
       } else unplaced.push(c.name);
     }
-    if(unplaced.length) dataBanner('⚠ Not placed (address lookup failed): '+unplaced.join(', ')+' — fix the address, then Retry.','warn');
+    if(unplaced.length) dataBanner('⚠ Not placed (address lookup failed): '+unplaced.join(', ')+' — open the customer and fix the address or paste coordinates.','warn',15000);
   }catch(e){
     if(!MASTER_LIST.length){ MASTER_LIST=SAMPLE_CUSTOMERS; applyFilters(); }
     dataBanner('Customer database couldn\'t load ('+e.message+'). Retry, and tell Jake if it persists.');
@@ -1057,8 +1062,8 @@ async function fetchWx(c){
   if(wxCache[key]) return wxCache[key];
   const pt=await getJSON(`https://api.weather.gov/points/${c.lat.toFixed(4)},${c.lng.toFixed(4)}`);
   const p=pt.properties;
-  const [hourly,grid,ext]=await Promise.all([getJSON(p.forecastHourly),getJSON(p.forecastGridData).catch(()=>null),fetchMetNo(c.lat,c.lng)]);
-  const out={hourly,grid,ext};
+  const [hourly,grid,ext,om]=await Promise.all([getJSON(p.forecastHourly),getJSON(p.forecastGridData).catch(()=>null),fetchMetNo(c.lat,c.lng),fetchOpenMeteo(c.lat,c.lng)]);
+  const out={hourly,grid,ext,om};
   wxCache[key]=out;
   return out;
 }
@@ -1070,9 +1075,12 @@ async function buildBoard(){
   if(!list.length){ el.innerHTML='<div class="wb-empty">No customers in Scheduled / In house / JR Crew / Both / Paid Prep.</div>'; return; }
   el.innerHTML=list.map((c,i)=>{
     const s=STATUS[c.status]||{hex:'#96999c',label:'—'};
+    const lb=leadBadge(c);
+    const lbHtml=lb?'<span class="wb-lead" style="color:'+(lb.cls==='lead-late'?'#e05445':lb.cls==='lead-soon'?'#f0d020':'#2eb673')+'">'+
+      (lb.days>0?lb.days+'d left':lb.days===0?'due today':(-lb.days)+'d over')+'</span>':'';
     return `<div class="wb-row" data-i="${i}">
       <i class="wb-dot" style="background:${s.hex}"></i>
-      <div class="wb-name">${(c.mood!=null&&c.mood<=2)?MOODS[c.mood].e+' ':''}${esc(c.name)}${c.mark?' <b>'+c.mark+'</b>':''}</div>
+      <div class="wb-name">${(c.mood!=null&&c.mood<=2)?MOODS[c.mood].e+' ':''}${esc(c.name)}${c.mark?' <b>'+c.mark+'</b>':''}${lbHtml}</div>
       <div class="wb-chip pending" id="wb-${i}">…</div>
     </div>`;
   }).join('');
@@ -1086,9 +1094,9 @@ async function buildBoard(){
       const i=idx++; const c=list[i];
       const chipEl=document.getElementById('wb-'+i);
       try{
-        const {hourly,grid,ext}=await fetchWx(c);
+        const {hourly,grid,ext,om}=await fetchWx(c);
         if(!grid) throw new Error('no grid');
-        const a=analyzeWx(c,null,hourly,grid,null,ext);
+        const a=analyzeWx(c,null,hourly,grid,null,ext,om);
         chipEl.textContent=a.chip;
         chipEl.className='wb-chip '+a.cls;
         chipEl.title=a.text||'';
@@ -1123,7 +1131,7 @@ editModal.innerHTML=`<div class="em-card">
       <option value="2">😕 Frustrated</option><option value="1">😠 At risk</option></select></label>
     <label>Prep date<input id="emPrep" type="date"></label>
     <label>Ready date<input id="emReady" type="date"></label>
-    <label>Lead days (blank = company default)<input id="emLead" type="number" min="1" max="120"></label>
+    <label>Lead days (blank = state rate from lead-time map)<input id="emLead" type="number" min="1" max="365"></label>
     <label class="em-wide">Coordinates — only if the address won't locate (Google Maps → right-click the spot → click the numbers to copy → paste here)<input id="emLL" placeholder="34.9012, -80.9876"></label>
     <label class="em-wide">Basecamp link<input id="emBC" placeholder="https://…"></label>
     <label class="em-wide">Note<textarea id="emNote" rows="3"></textarea></label>
@@ -1300,7 +1308,7 @@ async function scheduleWeatherCheck(){
     try{
       const wx=await fetchWx(b.c);
       if(!wx.grid) continue;
-      const a=analyzeWx(b.c,null,wx.hourly,wx.grid,null,wx.ext);
+      const a=analyzeWx(b.c,null,wx.hourly,wx.grid,null,wx.ext,wx.om);
       for(const e of b.evs){
         const key=e.date.toISOString().slice(0,10);
         const day=(a.days||[]).find(d=>d.key===key);
@@ -1644,7 +1652,7 @@ async function buildInsights(){
   const newSnap={ts:Date.now()};
   function nextWeekRead(c,wx){ // run the engine as if New Schedule mode
     const saved=NEXT_MODE; NEXT_MODE=true;
-    let a=null; try{ a=analyzeWx({status:'inhouse'},null,wx.hourly,wx.grid,null,wx.ext); }catch(e){}
+    let a=null; try{ a=analyzeWx({status:'inhouse'},null,wx.hourly,wx.grid,null,wx.ext,wx.om); }catch(e){}
     NEXT_MODE=saved;
     if(!a) return null;
     const rain=a.days.reduce((t,d)=>t+(d.amt||0),0);
@@ -1692,7 +1700,7 @@ async function buildInsights(){
       try{
         const wx=await fetchWx(c);
         if(!wx.grid) continue;
-        const a=analyzeWx(c,null,wx.hourly,wx.grid,null,wx.ext);
+        const a=analyzeWx(c,null,wx.hourly,wx.grid,null,wx.ext,wx.om);
         if(a.cls==='bad') atRisk.push(c.name);
       }catch(e){}
       await sleep(250);
@@ -2007,13 +2015,40 @@ async function loadLeadTimes(){
   }catch(e){ console.warn('Lead times unavailable:', e.message); }
 }
 loadLeadTimes();
-function leadBadge(name){
-  const due=leadTimes[String(name).trim().toLowerCase()];
+// Published "Current Concrete Lead Times" map. Countdown uses the TOP of each range —
+// that's the promise; past it, you're late. California isn't on the map -> 30-day fallback.
+const LEAD_FALLBACK=30;
+const LEAD_BY_STATE=(()=>{
+  const wk=(lo,hi)=>({days:hi*7,label:lo+'–'+hi+' wks'});
+  const m={}, set=(names,v)=>names.forEach(n=>m[n]=v);
+  set(['Kentucky','Tennessee','West Virginia','Virginia','North Carolina','South Carolina','Georgia'],wk(2,4));
+  set(['Pennsylvania','Ohio','New Jersey','Delaware','Maryland','District of Columbia','Mississippi','Alabama','Florida','Louisiana','Texas','Oklahoma','New Mexico'],wk(3,5));
+  set(['Maine','New Hampshire','Vermont','Massachusetts','Connecticut','Rhode Island','New York','Michigan','Indiana','Illinois','Iowa','Missouri','Arkansas','Kansas','Nebraska','Colorado','Utah','Arizona'],wk(4,6));
+  set(['Minnesota','Wisconsin','South Dakota','Wyoming','Nevada'],wk(5,7));
+  set(['Washington','Oregon','Idaho','Montana','North Dakota'],wk(6,9));
+  return m;
+})();
+// Effective lead time: per-customer Lead days (edit box) > their state's published rate > fallback
+function effLead(c){
+  if(c&&typeof c==='object'){
+    if(c.leadDays!=null&&+c.leadDays>0) return {days:+c.leadDays,label:'custom'};
+    const st=stateOf(c);
+    if(st&&LEAD_BY_STATE[st]) return LEAD_BY_STATE[st];
+  }
+  return {days:LEAD_FALLBACK,label:null};
+}
+function leadBadge(c){
+  const name=typeof c==='string'?c:c.name;
+  let due=leadTimes[String(name).trim().toLowerCase()];
+  if((!due||isNaN(due))&&c&&typeof c==='object'&&c.ready){
+    const rd=new Date(c.ready);
+    if(!isNaN(rd)) due=new Date(rd.getTime()+effLead(c).days*86400e3);
+  }
   if(!due || isNaN(due)) return null;
   const days=Math.ceil((due - new Date())/86400000);
-  if(days>0)  return {text:`${days} day${days===1?'':'s'} left`,  cls: days<=3?'lead-soon':'lead-ok'};
-  if(days===0)return {text:'Due today', cls:'lead-soon'};
-  return {text:`${-days} day${days===-1?'':'s'} behind`, cls:'lead-late'};
+  if(days>0)  return {text:`${days} day${days===1?'':'s'} left on lead time`,  cls: days<=5?'lead-soon':'lead-ok', days};
+  if(days===0)return {text:'Lead time due today', cls:'lead-soon', days:0};
+  return {text:`${-days} day${days===-1?'':'s'} past lead time`, cls:'lead-late', days};
 }
 // ========================================================================================
 
@@ -2063,7 +2098,7 @@ function seriesAvg(series,from,to){
     if(b>a){ tot+=s.value*(b-a); w+=(b-a); } }
   return w?tot/w:null;
 }
-function analyzeWx(c,daily,hourly,grid,pastRain,ext,opts){
+function analyzeWx(c,daily,hourly,grid,pastRain,ext,om){
   const qpf=buildQpf(grid), hasQpf=qpf.length>0;
   const off=siteOffset(hourly), periods=(hourly.properties.periods||[]);
   const sky=gridSeries(grid,'skyCover');
@@ -2158,6 +2193,16 @@ function analyzeWx(c,daily,hourly,grid,pastRain,ext,opts){
       }
     }catch(e){}
   }
+  // third opinion: Open-Meteo model blend. Same rule as the Euro layer — grade every day on
+  // the WETTEST source, and fold its probability in so high-chance days can't read as open.
+  if(om){
+    days.forEach(d=>{
+      const m=om[d.key]; if(!m) return;
+      if(m.pop!=null) d.popMax=Math.max(d.popMax||0,m.pop);
+      if(m.amt-d.amt>=0.15) d.split2={a:d.amt,b:m.amt};
+      d.amt=Math.max(d.amt,m.amt);
+    });
+  }
   // freeze check: min temp from this day 18:00 through next day 09:00
   days.forEach((d,i)=>{
     const nxt=days[i+1];
@@ -2187,10 +2232,13 @@ function analyzeWx(c,daily,hourly,grid,pastRain,ext,opts){
     let g,why=[];
     if(d.nightLo!=null&&d.nightLo<=32){ g='freeze'; why.push('freeze risk overnight ('+d.nightLo+'°)'); }
     else if(d.hi!=null&&d.hi<38){ g='freeze'; why.push('too cold ('+d.hi+'° high)'); }
-    else if(d.morn>=0.1||(d.amt>=0.25&&(d.rainStart==null||d.rainStart<15))){ g='rain'; why.push(fmtIn(d.amt)+' rain'); }
+    else if(d.amt>=0.4){ g='rain'; why.push(fmtIn(d.amt)+' rain — too much even late-day'); }
+    else if(d.morn>=0.1||(d.amt>=0.2&&(d.rainStart==null||d.rainStart<15))){ g='rain'; why.push(fmtIn(d.amt)+' rain'); }
+    else if(d.popMax!=null&&d.popMax>=70&&d.amt>=0.1){ g='rain'; why.push(d.popMax+'% rain chance, ~'+fmtIn(d.amt)); }
     else if(d.amt>=0.08&&d.rainStart!=null&&d.rainStart>=15){ g='early'; why.push('rain in around '+(d.rainStart%12||12)+'pm — start early'); }
     else if(d.amt<0.1&&d.popMax>=60){ g='marginal'; why.push(d.popMax+'% rain chance — amounts unclear, treat cautious'); }
     else if(eff>0.7){ g='wet'; why.push('ground too wet'); }
+    else if(d.popMax!=null&&d.popMax>=55&&d.amt>=0.04){ g='marginal'; why.push(d.popMax+'% rain chance — watch it'); }
     else if(eff>0.25){ g='marginal'; why.push('ground still drying'); }
     else { g='good'; if(d.amt>0&&d.amt<0.08) why.push('light sprinkle possible — workable'); }
     if(g==='good'&&d.hi!=null&&d.hi>=95){ g='heat'; why.push(d.hi+'° — early start only'); }
@@ -2332,6 +2380,8 @@ function analyzeWx(c,daily,hourly,grid,pastRain,ext,opts){
   if(wetD&&wetD.why.length) ctx.push(wetD.dow+': '+wetD.why[0]);
   const sp=days.find(d=>d.split);
   if(sp) ctx.push(sp.dow+': models split (NWS '+fmtIn(sp.split.nws)+' vs Euro '+fmtIn(sp.split.euro)+') — graded on the wetter side');
+  const sp2=days.find(d=>d.split2&&!d.split);
+  if(sp2&&!sp) ctx.push(sp2.dow+': model blend shows '+fmtIn(sp2.split2.b)+' vs NWS '+fmtIn(sp2.split2.a)+' — graded on the wetter side');
   const s=STATUS[c.status];
   let prefix=(s?s.label:'')+(c.company&&c.company!=='Muscle Concrete'?' · '+c.company:'');
   if(c.status==='notready') chip='WHEN READY: '+chip;
@@ -2347,6 +2397,23 @@ function analyzeWx(c,daily,hourly,grid,pastRain,ext,opts){
 function cap(s){return s.charAt(0).toUpperCase()+s.slice(1);}
 // extended DETAIL forecast: MET Norway (free, commercial OK w/ attribution) reaches ~9-10 days,
 // used only for days beyond NWS coverage and always marked as estimates
+// third opinion: Open-Meteo "best match" model blend — daily rain totals AND rain probability.
+// Free, no key. Grade on the wettest source; fold its probability into popMax.
+async function fetchOpenMeteo(lat,lng){
+  try{
+    const r=await fetch('https://api.open-meteo.com/v1/forecast?latitude='+lat.toFixed(4)+'&longitude='+lng.toFixed(4)+
+      '&daily=precipitation_sum,precipitation_probability_max,temperature_2m_max,temperature_2m_min'+
+      '&temperature_unit=fahrenheit&precipitation_unit=inch&timezone=auto&forecast_days=10');
+    if(!r.ok) return null;
+    const j=await r.json(); const d=j.daily;
+    if(!d||!d.time) return null;
+    const out={};
+    d.time.forEach((k,i)=>out[k]={
+      amt:(d.precipitation_sum&&d.precipitation_sum[i])||0,
+      pop:d.precipitation_probability_max?d.precipitation_probability_max[i]:null});
+    return out;
+  }catch(e){ return null; }
+}
 async function fetchMetNo(lat,lng){
   for(const u of ['https://api.met.no/weatherapi/locationforecast/2.0/compact?lat='+lat.toFixed(4)+'&lon='+lng.toFixed(4),
                   '/api/metno?lat='+lat.toFixed(4)+'&lng='+lng.toFixed(4)]){
@@ -2482,7 +2549,7 @@ async function openTicket(c){
   const mk=document.getElementById('pMark');
   if(c.mark&&MARKS[c.mark]){ mk.style.display='inline'; mk.textContent=c.mark+' '+MARKS[c.mark].label; mk.style.background='var(--accent)'; mk.style.color='#131313'; }
   else{ mk.style.display='none'; }
-  const lb=document.getElementById('pLead'), badge=leadBadge(c.name);
+  const lb=document.getElementById('pLead'), badge=leadBadge(c);
   if(badge){ lb.style.display='inline'; lb.textContent=badge.text; lb.className='tag '+badge.cls; }
   else{ lb.style.display='none'; lb.className='tag'; }
   const md=document.getElementById('pMood');
@@ -2543,17 +2610,18 @@ async function openTicket(c){
     const pastP=fetchPastRain(c.lat,c.lng,back);
     const outlookP=fetchOutlook(c.lat,c.lng);
     const extP=fetchMetNo(c.lat,c.lng);
+    const omP=fetchOpenMeteo(c.lat,c.lng);
     const pt=await getJSON(`https://api.weather.gov/points/${c.lat.toFixed(4)},${c.lng.toFixed(4)}`);
     const p=pt.properties;
-    const [daily,hourly,alerts,grid,pastRain,outlook,ext]=await Promise.all([
+    const [daily,hourly,alerts,grid,pastRain,outlook,ext,om]=await Promise.all([
       getJSON(p.forecast),
       getJSON(p.forecastHourly),
       getJSON(`https://api.weather.gov/alerts/active?point=${c.lat.toFixed(4)},${c.lng.toFixed(4)}`).catch(()=>null),
       getJSON(p.forecastGridData).catch(()=>null),
-      pastP, outlookP, extP
+      pastP, outlookP, extP, omP
     ]);
     if(my!==reqToken) return; // stale click
-    render(body,daily,hourly,alerts,p,grid,c,pastRain,outlook,ext);
+    render(body,daily,hourly,alerts,p,grid,c,pastRain,outlook,ext,om);
   }catch(e){
     if(my!==reqToken) return;
     body.innerHTML=`<div class="error">Couldn't load the forecast (${e.message}). NWS covers US locations only — try again in a moment.</div>`;
@@ -2590,7 +2658,7 @@ function qpfBetween(qpf,from,to){ // total inches overlapping [from,to)
 }
 function fmtIn(x){ return x>=0.995?x.toFixed(1)+'"' : x>=0.005?x.toFixed(2).replace(/^0/,'')+'"' : '0"'; }
 
-function render(el,daily,hourly,alerts,pointProps,grid,cust,pastRain,outlook,ext){
+function render(el,daily,hourly,alerts,pointProps,grid,cust,pastRain,outlook,ext,om){
   const hrs=(hourly.properties.periods||[]).slice(0,12);
   const days=(daily.properties.periods||[]).slice(0,10);
   const now=hrs[0];
@@ -2601,7 +2669,7 @@ function render(el,daily,hourly,alerts,pointProps,grid,cust,pastRain,outlook,ext
   // ===== Scheduling Call (the smart summary) =====
   if(cust&&hourly&&hourly.properties&&grid){
     try{
-      const a=analyzeWx(cust,daily,hourly,grid,pastRain,ext);
+      const a=analyzeWx(cust,daily,hourly,grid,pastRain,ext,om);
       html+=`<div class="sect schedcall"><h3>Scheduling Outlook</h3>
         <div class="sc-chip ${a.cls}">${esc(a.chip)}</div>
         <div class="sc-pre">${esc(a.prefix)}</div>
