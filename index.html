@@ -766,7 +766,7 @@ async function loadCustomers(){
       if(p){ c.lat=p.lat; c.lng=p.lng; list.push(c); MASTER_LIST=list; applyFilters(); }
       else unplaced.push(c.name);
     }
-    if(unplaced.length) dataBanner('⚠ Not placed (address lookup failed): '+unplaced.join(', ')+' — open the customer and fix the address or paste coordinates.','warn',15000);
+    // unplaced-address banner removed by request — find no-pin customers via search (⚠ no pin) instead
     if(!list.length){ MASTER_LIST=SAMPLE_CUSTOMERS; applyFilters(); dataBanner('Sheet reached but no customer rows found — showing sample pins.'); }
     else dataBanner(null);
   }catch(e){
@@ -831,7 +831,7 @@ async function loadCustomersSB(){
       } else unplaced.push(c.name);
     }
     UNPLACED=needGeo.filter(c=>!isFinite(c.lat)||!isFinite(c.lng));
-    if(unplaced.length) dataBanner('⚠ Not placed (address lookup failed): '+unplaced.join(', ')+' — search the name and fix the address or paste coordinates.','warn',15000);
+    // unplaced-address banner removed by request — find no-pin customers via search (⚠ no pin) instead
   }catch(e){
     if(!MASTER_LIST.length){ MASTER_LIST=SAMPLE_CUSTOMERS; applyFilters(); }
     dataBanner('Customer database couldn\'t load ('+e.message+'). Retry, and tell Jake if it persists.');
