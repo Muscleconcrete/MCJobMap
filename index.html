@@ -419,6 +419,7 @@
       <div class="calline" id="pCal" style="display:none"></div>
       <div class="addr" id="pAddr"></div>
       <div class="phline" id="pPhone" style="display:none"></div>
+      <div class="phline" id="pInsp" style="display:none"></div>
       <div class="row tk-actions">
         <button id="tkEdit">✎ Edit</button>
         <button id="tkComplete">✓ Mark Completed</button>
@@ -796,7 +797,9 @@ function badPin(){
   try{ localStorage.removeItem('mcPin'); }catch(e){}
   alert('That PIN was not accepted — change not saved. Try again.');
 }
+let HAS_INSP=false; // true once the inspection column exists in the database
 function dbRow(c){ // db row -> map customer object
+  if('inspection' in c) HAS_INSP=true;
   return {
     id:c.id, name:c.name||'', addr:c.address||'',
     lat:c.lat!=null?+c.lat:NaN, lng:c.lng!=null?+c.lng:NaN,
@@ -806,7 +809,8 @@ function dbRow(c){ // db row -> map customer object
     phone:c.phone||'', prep:c.prep_date||'', ready:c.ready_date||'',
     leadDays:c.lead_days!=null?+c.lead_days:null,
     mood:c.mood!=null?+c.mood:null, basecamp:c.basecamp_link||'',
-    completedDate:c.completed_date||''
+    completedDate:c.completed_date||'',
+    inspection:c.inspection===true?true:(c.inspection===false?false:null)
   };
 }
 async function loadCustomersSB(){
@@ -1133,6 +1137,7 @@ editModal.innerHTML=`<div class="em-card">
       <option value="2">😕 Frustrated</option><option value="1">😠 At risk</option></select></label>
     <label>Prep date<input id="emPrep" type="date"></label>
     <label>Ready date<input id="emReady" type="date"></label>
+    <label>Inspection<select id="emInsp"><option value="">—</option><option value="yes">✓ Yes</option><option value="no">✗ No</option></select></label>
     <label>Lead days (blank = state rate from lead-time map)<input id="emLead" type="number" min="1" max="365"></label>
     <label class="em-wide">Coordinates — only if the address won't locate (Google Maps → right-click the spot → click the numbers to copy → paste here)<input id="emLL" placeholder="34.9012, -80.9876"></label>
     <label class="em-wide">Basecamp link<input id="emBC" placeholder="https://…"></label>
@@ -1156,6 +1161,7 @@ function openEditor(c){
   v('emMark',c&&c.mark?c.mark:''); v('emCompany',c?c.company:'Muscle Concrete');
   v('emPhone',c?c.phone:''); v('emMood',c&&c.mood!=null?String(c.mood):'');
   v('emPrep',c?c.prep:''); v('emReady',c?c.ready:''); v('emLead',c&&c.leadDays!=null?c.leadDays:'');
+  v('emInsp',c?(c.inspection===true?'yes':(c.inspection===false?'no':'')):'');
   v('emBC',c?c.basecamp:''); v('emNote',c?c.note:'');
   v('emLL',(c&&isFinite(c.lat))?(c.lat.toFixed(5)+', '+c.lng.toFixed(5)):'');
   editModal.classList.add('show');
@@ -1173,6 +1179,8 @@ document.getElementById('emSave').onclick=async ()=>{
     lead_days:g('emLead')?+g('emLead'):null,
     basecamp_link:g('emBC')||null, note:g('emNote')||null
   };
+  if(HAS_INSP) fields.inspection=g('emInsp')==='yes'?true:(g('emInsp')==='no'?false:null);
+  else if(g('emInsp')) alert("Heads up: the Inspection column isn't in the database yet, so that one field won't save. Jake — run this once in Supabase SQL Editor:\n\nalter table customers add column inspection boolean;\n\nEverything else is saving normally.");
   if(!fields.name){ alert('Name is required.'); return; }
   // pasted coordinates always win over the address lookup
   const llRaw=g('emLL');
@@ -1604,7 +1612,7 @@ async function buildInsights(){
   if(permits.length>=3) pushInsight(permits.length+' jobs are waiting on permits — a quick status sweep could unlock ready work.');
   L2.forEach(c=>{ if(c.ready&&c.readyDays==null){ const rd=new Date(c.ready); if(!isNaN(rd)) c.readyDays=Math.max(0,Math.round((Date.now()-rd)/86400e3)); } });
   const lateList=L2.filter(c=>c.readyDays!=null&&['inhouse','jrcrew','both'].includes(c.status))
-    .map(c=>({c,over:c.readyDays-(c.leadDays||LEAD_DAYS_DEFAULT)}))
+    .map(c=>({c,over:c.readyDays-effLead(c).days}))
     .sort((a,b)=>b.over-a.over);
   const past=lateList.filter(x=>x.over>0), near=lateList.filter(x=>x.over>=-5&&x.over<=0);
   if(past.length) pushInsight(past.length+' job'+(past.length>1?'s':'')+' PAST lead time: '+
@@ -2021,7 +2029,7 @@ async function loadLeadTimes(){
 loadLeadTimes();
 // Published "Current Concrete Lead Times" map. Countdown uses the TOP of each range —
 // that's the promise; past it, you're late. California isn't on the map -> 30-day fallback.
-const LEAD_FALLBACK=30;
+const LEAD_FALLBACK=LEAD_DAYS_DEFAULT; // company default for states not on the map (e.g. CA)
 const LEAD_BY_STATE=(()=>{
   const wk=(lo,hi)=>({days:hi*7,label:lo+'–'+hi+' wks'});
   const m={}, set=(names,v)=>names.forEach(n=>m[n]=v);
@@ -2042,12 +2050,12 @@ function effLead(c){
   return {days:LEAD_FALLBACK,label:null};
 }
 function leadBadge(c){
-  const name=typeof c==='string'?c:c.name;
-  let due=leadTimes[String(name).trim().toLowerCase()];
-  if((!due||isNaN(due))&&c&&typeof c==='object'&&c.ready){
-    const rd=new Date(c.ready);
-    if(!isNaN(rd)) due=new Date(rd.getTime()+effLead(c).days*86400e3);
-  }
+  // Lead time starts the day the customer is READY — never the day they landed on the map.
+  // No ready date = no countdown, anywhere.
+  if(!c||typeof c!=='object'||!c.ready) return null;
+  const rd=new Date(c.ready);
+  if(isNaN(rd)) return null;
+  const due=new Date(rd.getTime()+effLead(c).days*86400e3);
   if(!due || isNaN(due)) return null;
   const days=Math.ceil((due - new Date())/86400000);
   if(days>0)  return {text:`${days} day${days===1?'':'s'} left on lead time`,  cls: days<=5?'lead-soon':'lead-ok', days};
@@ -2575,11 +2583,15 @@ async function openTicket(c){
     ph.style.display='block';
     ph.innerHTML='📞 <a href="tel:'+esc(digits)+'">'+esc(c.phone)+'</a>';
   } else ph.style.display='none';
+  const insEl=document.getElementById('pInsp');
+  if(c.inspection===true){ insEl.style.display='block'; insEl.innerHTML='Inspection: <b style="color:#2eb673">✓ Yes</b>'; }
+  else if(c.inspection===false){ insEl.style.display='block'; insEl.innerHTML='Inspection: <b style="color:#e05445">✗ No</b>'; }
+  else insEl.style.display='none';
   const rl=document.getElementById('pReady');
   c.readyDays=null;
   if(c.ready){ const rd=new Date(c.ready); if(!isNaN(rd)){ c.readyDays=Math.max(0,Math.round((Date.now()-rd)/86400e3)); } }
   if(c.readyDays!=null){
-    const lead=c.leadDays||LEAD_DAYS_DEFAULT;
+    const lead=effLead(c).days;
     const left=lead-c.readyDays;
     rl.style.display='block';
     rl.textContent='Ready '+new Date(c.ready).toLocaleDateString([],{month:'short',day:'numeric'})+
