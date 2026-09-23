@@ -873,6 +873,75 @@ async function sbInsert(fields){
   }catch(e){ alert('Add failed: '+e.message); return null; }
 }
 function contractUrl(c){ return c.contractPath?SB_URL+'/storage/v1/object/public/contracts/'+c.contractPath:''; }
+// ===== Read the uploaded contract and auto-fill blank fields =====
+let PDFJS_P=null;
+function loadPdfJs(){
+  if(window.pdfjsLib) return Promise.resolve();
+  if(PDFJS_P) return PDFJS_P;
+  PDFJS_P=new Promise((res,rej)=>{
+    const sc=document.createElement('script');
+    sc.src='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+    sc.onload=()=>{ try{ window.pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'; res(); }catch(e){ rej(e); } };
+    sc.onerror=()=>rej(new Error('pdf reader failed to load'));
+    document.head.appendChild(sc);
+  });
+  return PDFJS_P;
+}
+async function pdfText(file,maxPages){
+  await loadPdfJs();
+  const buf=await file.arrayBuffer();
+  const doc=await pdfjsLib.getDocument({data:buf}).promise;
+  let out='';
+  const n=Math.min(doc.numPages,maxPages||4);
+  for(let i=1;i<=n;i++){
+    const pg=await doc.getPage(i);
+    const tc=await pg.getTextContent();
+    out+=tc.items.map(it=>it.str).join('\n')+'\n';
+  }
+  return out;
+}
+function parseContract(t){
+  const bad=v=>!v||/^_+$/.test(v)||/muscle\s*concrete/i.test(v)||/301\s*N\.?\s*Main/i.test(v);
+  const lab=labels=>{
+    for(const L of labels){
+      const m=t.match(new RegExp(L+'\\s*[:#]?\\s*\\n?\\s*([^\\n]{2,80})','i'));
+      if(m){ const v=m[1].trim(); if(!bad(v)) return v; }
+    }
+    return '';
+  };
+  const out={};
+  out.name=lab(['customer\\s*name','client\\s*name','buyer\\s*name','homeowner','purchaser']);
+  out.addr=lab(['job\\s*site\\s*address','jobsite\\s*address','site\\s*address','job\\s*address','project\\s*address','installation\\s*address','service\\s*address','customer\\s*address','job\\s*location','address']);
+  if(!out.addr){ // fallback: anything shaped like a street address
+    const m=t.match(/\d{1,6}\s+[A-Za-z0-9.\- ]{2,40}\b(?:Rd|Road|St|Street|Dr|Drive|Ln|Lane|Hwy|Highway|Ave|Avenue|Ct|Court|Cir|Circle|Way|Blvd|Pkwy|Trail|Trl|Loop)\b[^\n]{0,40}/i);
+    if(m&&!/301\s*N\.?\s*Main/i.test(m[0])) out.addr=m[0].trim();
+  }
+  const phones=(t.match(/\(?\d{3}\)?[\s.\-]?\d{3}[\s.\-]\d{4}/g)||[])
+    .filter(p=>{const d=p.replace(/\D/g,''); return d!=='3369551159';});
+  if(phones.length) out.phone=phones[0].trim();
+  const tm=t.match(/(?:contract\s*total|total\s*price|contract\s*price|grand\s*total|total)\s*[:#]?\s*\n?\s*\$?\s*([\d,]+(?:\.\d{2})?)/i);
+  if(tm) out.total=tm[1];
+  return out;
+}
+async function autoFillFromContract(file,statEl){
+  statEl.textContent='✓ Uploaded — reading contract…';
+  let t='';
+  try{ t=await pdfText(file,4); }catch(e){ statEl.textContent='✓ Uploaded (contract text unreadable)'; return; }
+  if(!t||t.replace(/\s/g,'').length<40){ statEl.textContent='✓ Uploaded — no readable text (scanned copy?)'; return; }
+  let p={}; try{ p=parseContract(t); }catch(e){}
+  const filled=[];
+  const fill=(id,val,label)=>{
+    const el=document.getElementById(id);
+    if(el&&val&&!el.value.trim()){ el.value=val; el.style.borderColor='var(--accent)'; filled.push(label); }
+  };
+  fill('emName',p.name,'name');
+  fill('emAddr',p.addr,'address');
+  fill('emPhone',p.phone,'phone');
+  const saw=p.total?' · contract total ~$'+p.total:'';
+  statEl.textContent='✓ Uploaded'+(filled.length
+    ?' — pulled '+filled.join(', ')+' from the contract. Check it, then Save.'
+    :' — nothing blank to fill')+saw;
+}
 async function uploadContract(c,file){
   // stored under a timestamped name so a re-upload never fights the CDN cache
   const path=c.id+'-'+Date.now()+'.pdf';
@@ -1202,6 +1271,7 @@ function openEditor(c){
         await uploadContract(c,f);
         ctrStat.textContent='✓ Uploaded';
         ctrCur.innerHTML='📄 <a href="'+esc(contractUrl(c))+'" target="_blank" rel="noopener">current contract</a> — choose a file to replace it:';
+        try{ await autoFillFromContract(f,ctrStat); }catch(e){}
       }catch(e){ ctrStat.textContent=''; alert(e.message); }
       ctrFile.value='';
     };
