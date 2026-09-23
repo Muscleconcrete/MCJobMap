@@ -420,6 +420,7 @@
       <div class="addr" id="pAddr"></div>
       <div class="phline" id="pPhone" style="display:none"></div>
       <div class="phline" id="pInsp" style="display:none"></div>
+      <div class="phline" id="pCtr" style="display:none"></div>
       <div class="row tk-actions">
         <button id="tkEdit">✎ Edit</button>
         <button id="tkComplete">✓ Mark Completed</button>
@@ -798,8 +799,10 @@ function badPin(){
   alert('That PIN was not accepted — change not saved. Try again.');
 }
 let HAS_INSP=false; // true once the inspection column exists in the database
+let HAS_CTR=false;  // true once the contract_path column exists in the database
 function dbRow(c){ // db row -> map customer object
   if('inspection' in c) HAS_INSP=true;
+  if('contract_path' in c) HAS_CTR=true;
   return {
     id:c.id, name:c.name||'', addr:c.address||'',
     lat:c.lat!=null?+c.lat:NaN, lng:c.lng!=null?+c.lng:NaN,
@@ -810,7 +813,8 @@ function dbRow(c){ // db row -> map customer object
     leadDays:c.lead_days!=null?+c.lead_days:null,
     mood:c.mood!=null?+c.mood:null, basecamp:c.basecamp_link||'',
     completedDate:c.completed_date||'',
-    inspection:c.inspection===true?true:(c.inspection===false?false:null)
+    inspection:c.inspection===true?true:(c.inspection===false?false:null),
+    contractPath:c.contract_path||''
   };
 }
 async function loadCustomersSB(){
@@ -867,6 +871,21 @@ async function sbInsert(fields){
     if(!rows.length){ badPin(); return null; }
     return dbRow(rows[0]);
   }catch(e){ alert('Add failed: '+e.message); return null; }
+}
+function contractUrl(c){ return c.contractPath?SB_URL+'/storage/v1/object/public/contracts/'+c.contractPath:''; }
+async function uploadContract(c,file){
+  // stored under a timestamped name so a re-upload never fights the CDN cache
+  const path=c.id+'-'+Date.now()+'.pdf';
+  const r=await fetch(SB_URL+'/storage/v1/object/contracts/'+path,{
+    method:'POST',
+    headers:{'apikey':SB_KEY,'Authorization':'Bearer '+SB_KEY,'Content-Type':'application/pdf','x-upsert':'true'},
+    body:file});
+  if(!r.ok){
+    let msg=''; try{ msg=(await r.json()).message||''; }catch(e){}
+    throw new Error('Upload failed ('+r.status+')'+(msg?': '+msg:'')+' — is the "contracts" storage bucket set up?');
+  }
+  const ok=await sbUpdate(c,{contract_path:path}); // linking to the customer is PIN-gated like any edit
+  if(!ok) throw new Error('File stored but could not be linked to the customer — check the crew PIN and try again.');
 }
 async function sbDelete(c){
   const h=sbHeaders(true);
@@ -1141,6 +1160,11 @@ editModal.innerHTML=`<div class="em-card">
     <label>Lead days (blank = state rate from lead-time map)<input id="emLead" type="number" min="1" max="365"></label>
     <label class="em-wide">Coordinates — only if the address won't locate (Google Maps → right-click the spot → click the numbers to copy → paste here)<input id="emLL" placeholder="34.9012, -80.9876"></label>
     <label class="em-wide">Basecamp link<input id="emBC" placeholder="https://…"></label>
+    <label class="em-wide">Contract PDF<span id="emCtrRow" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <span id="emCtrCur" style="font-size:12px;color:var(--muted)"></span>
+      <input type="file" id="emCtrFile" accept="application/pdf" style="font-size:12px">
+      <span id="emCtrStat" style="font-size:12px;color:var(--muted)"></span>
+    </span></label>
     <label class="em-wide">Note<textarea id="emNote" rows="3"></textarea></label>
   </div>
   <div class="em-foot">
@@ -1162,6 +1186,29 @@ function openEditor(c){
   v('emPhone',c?c.phone:''); v('emMood',c&&c.mood!=null?String(c.mood):'');
   v('emPrep',c?c.prep:''); v('emReady',c?c.ready:''); v('emLead',c&&c.leadDays!=null?c.leadDays:'');
   v('emInsp',c?(c.inspection===true?'yes':(c.inspection===false?'no':'')):'');
+  // contract row: existing customers can upload; new ones save first
+  const ctrFile=document.getElementById('emCtrFile'), ctrCur=document.getElementById('emCtrCur'), ctrStat=document.getElementById('emCtrStat');
+  ctrFile.value=''; ctrStat.textContent='';
+  if(c){
+    ctrFile.style.display='inline';
+    ctrCur.innerHTML=c.contractPath?'📄 <a href="'+esc(contractUrl(c))+'" target="_blank" rel="noopener">current contract</a> — choose a file to replace it:':'none yet — choose a PDF:';
+    ctrFile.onchange=async()=>{
+      const f=ctrFile.files&&ctrFile.files[0];
+      if(!f) return;
+      if(f.type&&f.type!=='application/pdf'){ ctrStat.textContent='PDF files only.'; ctrFile.value=''; return; }
+      if(!HAS_CTR){ alert("The contract column isn't in the database yet. Jake — run this once in Supabase SQL Editor:\n\nalter table customers add column contract_path text;\n\nThen set up the storage bucket (steps in chat) and try again."); ctrFile.value=''; return; }
+      ctrStat.textContent='Uploading…';
+      try{
+        await uploadContract(c,f);
+        ctrStat.textContent='✓ Uploaded';
+        ctrCur.innerHTML='📄 <a href="'+esc(contractUrl(c))+'" target="_blank" rel="noopener">current contract</a> — choose a file to replace it:';
+      }catch(e){ ctrStat.textContent=''; alert(e.message); }
+      ctrFile.value='';
+    };
+  } else {
+    ctrFile.style.display='none'; ctrFile.onchange=null;
+    ctrCur.textContent='Save the customer first, then reopen to upload their contract.';
+  }
   v('emBC',c?c.basecamp:''); v('emNote',c?c.note:'');
   v('emLL',(c&&isFinite(c.lat))?(c.lat.toFixed(5)+', '+c.lng.toFixed(5)):'');
   editModal.classList.add('show');
@@ -2583,6 +2630,10 @@ async function openTicket(c){
     ph.style.display='block';
     ph.innerHTML='📞 <a href="tel:'+esc(digits)+'">'+esc(c.phone)+'</a>';
   } else ph.style.display='none';
+  const ctrEl=document.getElementById('pCtr');
+  if(c.contractPath){ ctrEl.style.display='block';
+    ctrEl.innerHTML='📄 <a href="'+esc(contractUrl(c))+'" target="_blank" rel="noopener">View contract</a>'; }
+  else ctrEl.style.display='none';
   const insEl=document.getElementById('pInsp');
   if(c.inspection===true){ insEl.style.display='block'; insEl.innerHTML='Inspection: <b style="color:#2eb673">✓ Yes</b>'; }
   else if(c.inspection===false){ insEl.style.display='block'; insEl.innerHTML='Inspection: <b style="color:#e05445">✗ No</b>'; }
